@@ -29,6 +29,8 @@ const state = {
   adminMenu: "recipes",
   selectedRecipeId: null,
   selectedVariantId: null,
+  selectedAnalysisSupplyId: null,
+  analysisMode: "weekday",
   loadingVariantId: null,
   pendingCancelBatchId: null,
   activeAlarmEventId: null,
@@ -65,6 +67,7 @@ if (pruneExpiredLogs()) {
 }
 state.selectedRecipeId = getActiveRecipes()[0]?.id || null;
 state.selectedVariantId = getVariantsForRecipe(state.selectedRecipeId)[0]?.id || null;
+state.selectedAnalysisSupplyId = db.supplies[0]?.id || null;
 
 function uid(prefix) {
   const value = crypto?.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -291,6 +294,9 @@ function syncSelectedIds() {
   const variants = getVariantsForRecipe(state.selectedRecipeId);
   if (!state.selectedVariantId || !variants.some((variant) => variant.id === state.selectedVariantId)) {
     state.selectedVariantId = variants[0]?.id || null;
+  }
+  if (!state.selectedAnalysisSupplyId || !db.supplies.some((supply) => supply.id === state.selectedAnalysisSupplyId)) {
+    state.selectedAnalysisSupplyId = db.supplies[0]?.id || null;
   }
 }
 
@@ -896,6 +902,7 @@ function renderAdminScreen() {
     ["adjust", "입고/재고 조정"],
     ["alarms", "알림 관리"],
     ["alarmLogs", "알림 기록"],
+    ["analysis", "소모량 분석"],
     ["logs", "전체 로그 확인"],
   ];
   const activeLabel = menuLabels.find(([key]) => key === state.adminMenu)?.[1] || "관리자";
@@ -937,6 +944,7 @@ function renderAdminScreen() {
   if (state.adminMenu === "adjust") renderAdjustAdmin(body);
   if (state.adminMenu === "alarms") renderAlarmsAdmin(body);
   if (state.adminMenu === "alarmLogs") renderAlarmLogsAdmin(body);
+  if (state.adminMenu === "analysis") renderUsageAnalysisAdmin(body);
   if (state.adminMenu === "logs") renderAllLogsAdmin(body);
 }
 
@@ -1607,6 +1615,157 @@ function renderAlarmLogsAdmin(container) {
       </div>
     </div>
   `;
+}
+
+function getConsumptionRowsForSupply(supplyId) {
+  const canceledBatchIds = new Set(db.prepBatches.filter((batch) => batch.status === "canceled").map((batch) => batch.id));
+  return db.inventoryTransactions
+    .filter((transaction) => transaction.supplyId === supplyId && transaction.type === "prep_consume")
+    .filter((transaction) => !transaction.prepBatchId || !canceledBatchIds.has(transaction.prepBatchId))
+    .map((transaction) => ({
+      date: new Date(transaction.createdAt),
+      qty: Math.abs(Number(transaction.qtyChange || 0)),
+      unit: transaction.unit,
+    }))
+    .filter((row) => Number.isFinite(row.date.getTime()) && row.qty > 0);
+}
+
+function buildWeekdayConsumptionPoints(rows) {
+  const dayOrder = [1, 2, 3, 4, 5, 6, 0];
+  const labels = ["월", "화", "수", "목", "금", "토", "일"];
+  const totals = new Map(dayOrder.map((day) => [day, 0]));
+  rows.forEach((row) => {
+    const day = row.date.getDay();
+    totals.set(day, (totals.get(day) || 0) + row.qty);
+  });
+  return dayOrder.map((day, index) => ({ label: labels[index], value: totals.get(day) || 0 }));
+}
+
+function monthKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function monthLabel(key) {
+  const [year, month] = key.split("-");
+  return `${year.slice(2)}.${month}`;
+}
+
+function buildMonthlyConsumptionPoints(rows) {
+  const start = new Date();
+  start.setDate(start.getDate() - LOG_RETENTION_DAYS.inventoryTransactions + 1);
+  start.setDate(1);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date();
+  end.setDate(1);
+  end.setHours(0, 0, 0, 0);
+
+  const months = [];
+  for (let cursor = new Date(start); cursor <= end; cursor.setMonth(cursor.getMonth() + 1)) {
+    months.push(monthKey(cursor));
+  }
+
+  const totals = new Map(months.map((key) => [key, 0]));
+  rows.forEach((row) => {
+    const key = monthKey(row.date);
+    if (totals.has(key)) totals.set(key, (totals.get(key) || 0) + row.qty);
+  });
+  return months.map((key) => ({ label: monthLabel(key), value: totals.get(key) || 0 }));
+}
+
+function renderUsageLineChart(points, unit) {
+  const width = 720;
+  const height = 320;
+  const pad = { top: 24, right: 24, bottom: 56, left: 72 };
+  const plotWidth = width - pad.left - pad.right;
+  const plotHeight = height - pad.top - pad.bottom;
+  const maxValue = Math.max(...points.map((point) => point.value), 1);
+  const coords = points.map((point, index) => {
+    const x = points.length === 1 ? pad.left + plotWidth / 2 : pad.left + (plotWidth * index) / (points.length - 1);
+    const y = pad.top + plotHeight - (point.value / maxValue) * plotHeight;
+    return { ...point, x, y };
+  });
+  const gridLines = Array.from({ length: 5 }, (_, index) => {
+    const value = (maxValue * (4 - index)) / 4;
+    const y = pad.top + (plotHeight * index) / 4;
+    return `
+      <line x1="${pad.left}" y1="${y}" x2="${width - pad.right}" y2="${y}" class="usage-chart-grid" />
+      <text x="${pad.left - 10}" y="${y + 5}" text-anchor="end" class="usage-chart-y">${numberText(Math.round(value))}</text>
+    `;
+  }).join("");
+  const linePoints = coords.map((point) => `${point.x},${point.y}`).join(" ");
+  const dots = coords
+    .map(
+      (point) => `
+        <circle cx="${point.x}" cy="${point.y}" r="5" class="usage-chart-dot" />
+        <text x="${point.x}" y="${point.y - 12}" text-anchor="middle" class="usage-chart-value">${numberText(Math.round(point.value))}</text>
+        <text x="${point.x}" y="${height - 22}" text-anchor="middle" class="usage-chart-x">${escapeHtml(point.label)}</text>
+      `,
+    )
+    .join("");
+
+  return `
+    <svg class="usage-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="소모량 추이 그래프">
+      <rect x="0" y="0" width="${width}" height="${height}" rx="8" class="usage-chart-bg" />
+      ${gridLines}
+      <line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}" class="usage-chart-axis" />
+      <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" class="usage-chart-axis" />
+      <polyline points="${linePoints}" class="usage-chart-line" />
+      ${dots}
+      <text x="${pad.left}" y="${height - 6}" class="usage-chart-unit">단위: ${escapeHtml(unit)}</text>
+    </svg>
+  `;
+}
+
+function renderUsageAnalysisAdmin(container) {
+  const supply = getSupply(state.selectedAnalysisSupplyId) || db.supplies[0] || null;
+  if (!supply) {
+    container.innerHTML = `<div class="admin-card"><div class="empty-state">분석할 소모품이 없습니다.</div></div>`;
+    return;
+  }
+  state.selectedAnalysisSupplyId = supply.id;
+  const rows = getConsumptionRowsForSupply(supply.id);
+  const points = state.analysisMode === "month" ? buildMonthlyConsumptionPoints(rows) : buildWeekdayConsumptionPoints(rows);
+  const unit = supply.unit || rows[0]?.unit || "g";
+  const total = points.reduce((sum, point) => sum + point.value, 0);
+  const average = points.length ? total / points.length : 0;
+  const peak = points.reduce((best, point) => (point.value > best.value ? point : best), points[0] || { label: "-", value: 0 });
+
+  container.innerHTML = `
+    <div class="admin-card">
+      <div class="analysis-toolbar">
+        <label class="field">
+          <span>재료</span>
+          <select id="analysisSupply">
+            ${db.supplies.map((item) => `<option value="${item.id}" ${item.id === supply.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
+          </select>
+        </label>
+        <div class="segmented-control" aria-label="분석 기준">
+          <button class="segment-button ${state.analysisMode === "weekday" ? "is-active" : ""}" type="button" data-analysis-mode="weekday">요일별</button>
+          <button class="segment-button ${state.analysisMode === "month" ? "is-active" : ""}" type="button" data-analysis-mode="month">월별</button>
+        </div>
+      </div>
+      <div class="analysis-summary">
+        <div><span>총 소모량</span><strong>${numberText(Math.round(total))}${escapeHtml(unit)}</strong></div>
+        <div><span>평균</span><strong>${numberText(Math.round(average))}${escapeHtml(unit)}</strong></div>
+        <div><span>최다</span><strong>${escapeHtml(peak.label)} · ${numberText(Math.round(peak.value))}${escapeHtml(unit)}</strong></div>
+      </div>
+      <div class="usage-chart-wrap">
+        ${renderUsageLineChart(points, unit)}
+      </div>
+      <p class="muted">제조 차감 로그만 집계하며, 취소된 제조 배치는 제외합니다. 현재 로그 보관 기준상 최근 ${LOG_RETENTION_DAYS.inventoryTransactions}일 안의 소모량만 분석합니다.</p>
+    </div>
+  `;
+
+  container.querySelector("#analysisSupply").addEventListener("change", (event) => {
+    state.selectedAnalysisSupplyId = event.target.value;
+    renderUsageAnalysisAdmin(container);
+  });
+  container.querySelectorAll("[data-analysis-mode]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.analysisMode = button.dataset.analysisMode;
+      renderUsageAnalysisAdmin(container);
+    });
+  });
 }
 
 function renderAllLogsAdmin(container) {

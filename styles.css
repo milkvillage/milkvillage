@@ -780,6 +780,115 @@ th {
   border-top: 1px solid var(--line);
 }
 
+.analysis-toolbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  gap: 14px;
+  align-items: end;
+  margin-bottom: 16px;
+}
+
+.segmented-control {
+  min-height: 46px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #eef3f5;
+}
+
+.segment-button {
+  min-height: 38px;
+  padding: 8px 14px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 900;
+}
+
+.segment-button.is-active {
+  background: var(--surface);
+  color: var(--teal-dark);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.analysis-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.analysis-summary div {
+  display: grid;
+  gap: 6px;
+}
+
+.analysis-summary span {
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.analysis-summary strong {
+  font-size: 24px;
+}
+
+.usage-chart-wrap {
+  margin: 18px 0 12px;
+  overflow-x: auto;
+}
+
+.usage-chart {
+  width: 100%;
+  min-width: 640px;
+  display: block;
+}
+
+.usage-chart-bg {
+  fill: #fbfcfd;
+}
+
+.usage-chart-grid {
+  stroke: #dbe3e7;
+  stroke-width: 1;
+}
+
+.usage-chart-axis {
+  stroke: #8fa0a8;
+  stroke-width: 1.5;
+}
+
+.usage-chart-line {
+  fill: none;
+  stroke: var(--teal);
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.usage-chart-dot {
+  fill: var(--surface);
+  stroke: var(--teal-dark);
+  stroke-width: 3;
+}
+
+.usage-chart-x,
+.usage-chart-y,
+.usage-chart-value,
+.usage-chart-unit {
+  fill: var(--muted);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.usage-chart-value {
+  fill: var(--text);
+}
+
 .muted {
   color: var(--muted);
 }
@@ -900,6 +1009,10 @@ th {
     min-height: auto;
   }
 
+  .analysis-toolbar {
+    grid-template-columns: 1fr;
+  }
+
   .admin-menu,
   .admin-column {
     border-right: 0;
@@ -935,8 +1048,17 @@ th {
   .form-grid,
   .dense-grid,
   .ingredient-row,
-  .alarm-row {
+  .alarm-row,
+  .analysis-summary {
     grid-template-columns: 1fr;
+  }
+
+  .segmented-control {
+    width: 100%;
+  }
+
+  .segment-button {
+    flex: 1;
   }
 
   .log-item {
