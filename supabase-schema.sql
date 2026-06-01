@@ -31,3 +31,16 @@ for update
 to anon
 using (id = 'main')
 with check (id = 'main');
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'milk_village_state'
+  ) then
+    alter publication supabase_realtime add table public.milk_village_state;
+  end if;
+end $$;

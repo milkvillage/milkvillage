@@ -11,6 +11,9 @@ const supabaseClient =
 
 let remoteSaveTimer = null;
 let applyingRemoteState = false;
+let remoteChannel = null;
+let remotePollTimer = null;
+let lastRemoteUpdatedAt = "";
 
 const state = {
   screen: "make",
@@ -161,28 +164,82 @@ async function initRemoteSync() {
 
   setRemoteStatus("DB 불러오는 중", "saving");
   try {
-    const { data, error } = await supabaseClient.from(REMOTE_TABLE).select("data").eq("id", REMOTE_STATE_ID).maybeSingle();
-    if (error) throw error;
-
-    if (data?.data) {
-      applyingRemoteState = true;
-      db = normalizeDb(data.data);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
-      state.selectedRecipeId = getActiveRecipes()[0]?.id || null;
-      state.selectedVariantId = getVariantsForRecipe(state.selectedRecipeId)[0]?.id || null;
-      applyingRemoteState = false;
-      setRemoteStatus("DB 연결됨", "online");
-      render();
-      return;
-    }
-
-    await saveRemoteNow();
+    const hasRemoteState = await fetchRemoteState({ force: true, source: "initial" });
+    if (!hasRemoteState) await saveRemoteNow();
+    subscribeRemoteChanges();
+    startRemotePolling();
     setRemoteStatus("DB 연결됨", "online");
   } catch (error) {
     applyingRemoteState = false;
     console.error(error);
     setRemoteStatus("DB 설정 필요", "error");
   }
+}
+
+async function fetchRemoteState({ force = false, source = "poll" } = {}) {
+  if (!supabaseClient) return false;
+  const { data, error } = await supabaseClient.from(REMOTE_TABLE).select("data, updated_at").eq("id", REMOTE_STATE_ID).maybeSingle();
+  if (error) throw error;
+  if (!data?.data) return false;
+  applyRemoteState(data, { force, source });
+  return true;
+}
+
+function applyRemoteState(row, { force = false, source = "realtime" } = {}) {
+  const nextUpdatedAt = row.updated_at || "";
+  if (!force && nextUpdatedAt && lastRemoteUpdatedAt && new Date(nextUpdatedAt) <= new Date(lastRemoteUpdatedAt)) return;
+
+  applyingRemoteState = true;
+  db = normalizeDb(row.data);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+  lastRemoteUpdatedAt = nextUpdatedAt || nowIso();
+  syncSelectedIds();
+  applyingRemoteState = false;
+  setRemoteStatus(source === "realtime" ? "실시간 동기화됨" : "DB 동기화됨", "online");
+  render();
+}
+
+function syncSelectedIds() {
+  const activeRecipes = getActiveRecipes();
+  if (!state.selectedRecipeId || !activeRecipes.some((recipe) => recipe.id === state.selectedRecipeId)) {
+    state.selectedRecipeId = activeRecipes[0]?.id || null;
+  }
+  const variants = getVariantsForRecipe(state.selectedRecipeId);
+  if (!state.selectedVariantId || !variants.some((variant) => variant.id === state.selectedVariantId)) {
+    state.selectedVariantId = variants[0]?.id || null;
+  }
+}
+
+function subscribeRemoteChanges() {
+  if (!supabaseClient || remoteChannel) return;
+  remoteChannel = supabaseClient
+    .channel("milk-village-state-sync")
+    .on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: REMOTE_TABLE,
+        filter: `id=eq.${REMOTE_STATE_ID}`,
+      },
+      (payload) => {
+        if (payload.new?.data) applyRemoteState(payload.new, { source: "realtime" });
+      },
+    )
+    .subscribe((status) => {
+      if (status === "SUBSCRIBED") setRemoteStatus("실시간 연결됨", "online");
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") setRemoteStatus("실시간 재연결 중", "saving");
+    });
+}
+
+function startRemotePolling() {
+  if (!supabaseClient || remotePollTimer) return;
+  remotePollTimer = window.setInterval(() => {
+    fetchRemoteState({ source: "poll" }).catch((error) => {
+      console.error(error);
+      setRemoteStatus("DB 동기화 지연", "error");
+    });
+  }, 10000);
 }
 
 function queueRemoteSave() {
@@ -193,17 +250,20 @@ function queueRemoteSave() {
 
 async function saveRemoteNow() {
   if (!supabaseClient) return;
+  remoteSaveTimer = null;
   setRemoteStatus("DB 저장 중", "saving");
+  const updatedAt = nowIso();
   const { error } = await supabaseClient.from(REMOTE_TABLE).upsert({
     id: REMOTE_STATE_ID,
     data: db,
-    updated_at: nowIso(),
+    updated_at: updatedAt,
   });
   if (error) {
     console.error(error);
     setRemoteStatus("DB 저장 실패", "error");
     return;
   }
+  lastRemoteUpdatedAt = updatedAt;
   setRemoteStatus("DB 연결됨", "online");
 }
 
