@@ -854,11 +854,10 @@ function renderOrderScreen() {
                 <thead>
                   <tr>
                     <th>품목명</th>
-                    <th>현재 재고</th>
+                    <th>현재 재고(g)</th>
                     <th>발주알림 기준량</th>
                     <th>1ea 용량</th>
                     <th>추천 발주량(ea)</th>
-                    <th>단위</th>
                     <th>최근 사용</th>
                   </tr>
                 </thead>
@@ -875,7 +874,6 @@ function renderOrderScreen() {
                           <td>${numberText(supply.minStock)}</td>
                           <td>${purchaseUnitQty > 0 ? `${numberText(purchaseUnitQty)}${escapeHtml(supply.unit)}` : "-"}</td>
                           <td><span class="big-number">${numberText(recommendedOrderEa)}ea</span></td>
-                          <td>${escapeHtml(supply.unit)}</td>
                           <td>${latest ? `${dateTimeText(latest.createdAt)}<br><span class="muted">${escapeHtml(latest.note || latest.type)}</span>` : "기록 없음"}</td>
                         </tr>
                       `;
