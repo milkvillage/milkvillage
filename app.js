@@ -14,6 +14,7 @@ let applyingRemoteState = false;
 let remoteChannel = null;
 let remotePollTimer = null;
 let lastRemoteUpdatedAt = "";
+let localRevisionAt = "";
 let audioContext = null;
 let pendingSpeech = null;
 
@@ -52,6 +53,7 @@ const els = {
 };
 
 let db = loadDb();
+localRevisionAt = db.meta?.updatedAt || "";
 state.selectedRecipeId = getActiveRecipes()[0]?.id || null;
 state.selectedVariantId = getVariantsForRecipe(state.selectedRecipeId)[0]?.id || null;
 
@@ -91,8 +93,15 @@ function localTimeValue(date = new Date()) {
 }
 
 function saveDb() {
+  if (!applyingRemoteState) markDbChanged();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
   queueRemoteSave();
+}
+
+function markDbChanged() {
+  const updatedAt = nowIso();
+  db.meta = { ...(db.meta || {}), updatedAt };
+  localRevisionAt = updatedAt;
 }
 
 function loadDb() {
@@ -112,6 +121,7 @@ function loadDb() {
 function normalizeDb(nextDb) {
   const fallback = seedDb();
   return {
+    meta: { ...fallback.meta, ...(nextDb?.meta || {}), updatedAt: nextDb?.meta?.updatedAt || nextDb?.updatedAt || fallback.meta.updatedAt },
     settings: { ...fallback.settings, ...(nextDb?.settings || {}) },
     supplies: Array.isArray(nextDb?.supplies) ? nextDb.supplies.map(normalizeSupply) : fallback.supplies,
     recipes: Array.isArray(nextDb?.recipes) ? nextDb.recipes : fallback.recipes,
@@ -167,65 +177,6 @@ function normalizeVoicePreset(sound) {
   };
 }
 
-function recordFreshness(record) {
-  return (
-    record?.updatedAt ||
-    record?.acknowledgedAt ||
-    record?.snoozedUntil ||
-    record?.canceledAt ||
-    record?.triggeredAt ||
-    record?.createdAt ||
-    ""
-  );
-}
-
-function isNewerRecord(candidate, current) {
-  const candidateTime = Date.parse(recordFreshness(candidate));
-  const currentTime = Date.parse(recordFreshness(current));
-  if (!Number.isFinite(candidateTime)) return !current;
-  if (!Number.isFinite(currentTime)) return true;
-  return candidateTime >= currentTime;
-}
-
-function mergeRecordsByFreshness(remoteItems = [], localItems = []) {
-  const merged = new Map();
-  [...remoteItems, ...localItems].forEach((item) => {
-    if (!item?.id) return;
-    const current = merged.get(item.id);
-    if (!current || isNewerRecord(item, current)) merged.set(item.id, item);
-  });
-  return [...merged.values()];
-}
-
-function mergeDbStates(remoteData, localData, { preferRemoteDeletions = false } = {}) {
-  const remoteDb = normalizeDb(remoteData);
-  const localDb = normalizeDb(localData);
-  return {
-    settings: { ...remoteDb.settings, ...localDb.settings },
-    supplies: mergeRecordsByFreshness(remoteDb.supplies, localDb.supplies).map(normalizeSupply),
-    recipes: mergeRecordsByFreshness(remoteDb.recipes, localDb.recipes),
-    recipeVariants: mergeRecordsByFreshness(remoteDb.recipeVariants, localDb.recipeVariants),
-    recipeVariantIngredients: mergeRecordsByFreshness(remoteDb.recipeVariantIngredients, localDb.recipeVariantIngredients),
-    prepBatches: mergeRecordsByFreshness(remoteDb.prepBatches, localDb.prepBatches),
-    inventoryTransactions: mergeRecordsByFreshness(remoteDb.inventoryTransactions, localDb.inventoryTransactions),
-    alarms: (preferRemoteDeletions ? remoteDb.alarms : mergeRecordsByFreshness(remoteDb.alarms, localDb.alarms)).map(normalizeAlarm),
-    alarmSounds: mergeRecordsByFreshness(remoteDb.alarmSounds, localDb.alarmSounds).map(normalizeVoicePreset),
-    alarmEventLogs: mergeRecordsByFreshness(remoteDb.alarmEventLogs, localDb.alarmEventLogs),
-  };
-}
-
-function mergeRemoteStateForApply(remoteData, localData) {
-  const remoteDb = normalizeDb(remoteData);
-  const localDb = normalizeDb(localData);
-  return {
-    ...remoteDb,
-    supplies: mergeRecordsByFreshness(localDb.supplies, remoteDb.supplies).map(normalizeSupply),
-    prepBatches: mergeRecordsByFreshness(localDb.prepBatches, remoteDb.prepBatches),
-    inventoryTransactions: mergeRecordsByFreshness(localDb.inventoryTransactions, remoteDb.inventoryTransactions),
-    alarmEventLogs: mergeRecordsByFreshness(localDb.alarmEventLogs, remoteDb.alarmEventLogs),
-  };
-}
-
 function setRemoteStatus(text, status = "") {
   if (!els.remoteStatus) return;
   els.remoteStatus.textContent = text;
@@ -266,9 +217,10 @@ function applyRemoteState(row, { force = false, source = "realtime" } = {}) {
   if (!force && nextUpdatedAt && lastRemoteUpdatedAt && new Date(nextUpdatedAt) <= new Date(lastRemoteUpdatedAt)) return;
 
   applyingRemoteState = true;
-  db = mergeRemoteStateForApply(row.data, db);
+  db = normalizeDb(row.data);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
   lastRemoteUpdatedAt = nextUpdatedAt || nowIso();
+  localRevisionAt = db.meta?.updatedAt || lastRemoteUpdatedAt;
   syncSelectedIds();
   applyingRemoteState = false;
   setRemoteStatus(source === "realtime" ? "실시간 동기화됨" : "DB 동기화됨", "online");
@@ -329,7 +281,8 @@ async function saveRemoteNow() {
   if (!supabaseClient) return;
   remoteSaveTimer = null;
   setRemoteStatus("DB 저장 중", "saving");
-  let dataToSave = normalizeDb(db);
+  const dataToSave = normalizeDb(db);
+  const localUpdatedAt = dataToSave.meta?.updatedAt || localRevisionAt || nowIso();
 
   const { data: remoteRow, error: fetchError } = await supabaseClient
     .from(REMOTE_TABLE)
@@ -341,26 +294,28 @@ async function saveRemoteNow() {
     setRemoteStatus("DB 저장 실패", "error");
     return;
   }
-  if (remoteRow?.data) {
-    const remoteChangedSinceLastSync =
-      remoteRow.updated_at && (!lastRemoteUpdatedAt || new Date(remoteRow.updated_at) > new Date(lastRemoteUpdatedAt));
-    dataToSave = mergeDbStates(remoteRow.data, dataToSave, { preferRemoteDeletions: Boolean(remoteChangedSinceLastSync) });
-    db = dataToSave;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+  if (remoteRow?.data && remoteRow.updated_at) {
+    const remoteIsNewerThanLastSync = !lastRemoteUpdatedAt || new Date(remoteRow.updated_at) > new Date(lastRemoteUpdatedAt);
+    const remoteIsNewerThanLocal = new Date(remoteRow.updated_at) > new Date(localUpdatedAt);
+    if (remoteIsNewerThanLastSync && remoteIsNewerThanLocal) {
+      applyRemoteState(remoteRow, { force: true, source: "save" });
+      return;
+    }
   }
 
-  const updatedAt = nowIso();
   const { error } = await supabaseClient.from(REMOTE_TABLE).upsert({
     id: REMOTE_STATE_ID,
     data: dataToSave,
-    updated_at: updatedAt,
+    updated_at: localUpdatedAt,
   });
   if (error) {
     console.error(error);
     setRemoteStatus("DB 저장 실패", "error");
     return;
   }
-  lastRemoteUpdatedAt = updatedAt;
+  db = dataToSave;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+  lastRemoteUpdatedAt = localUpdatedAt;
   setRemoteStatus("DB 연결됨", "online");
 }
 
@@ -437,6 +392,9 @@ function seedDb() {
   ];
 
   return {
+    meta: {
+      updatedAt: createdAt,
+    },
     settings: {
       adminPin: "1234",
       defaultSoundId: "sound_default",
