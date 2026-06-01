@@ -6,6 +6,10 @@
 
 `index.html` 파일을 브라우저로 열면 바로 사용할 수 있습니다.
 
+## 업데이트 반영
+
+앱은 `version.json`을 매번 새로 확인한 뒤 해당 버전의 `app.js`와 `styles.css`를 불러옵니다. 그래서 한 번 최신 버전을 받은 태블릿은 이후 업데이트 때 브라우저 데이터 삭제 없이 새로고침만으로 반영됩니다.
+
 ## Supabase 연결
 
 `supabase-schema.sql` 내용을 Supabase의 SQL Editor에서 한 번 실행하면 여러 기기에서 같은 데이터를 공유합니다.

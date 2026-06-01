@@ -4,7 +4,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>밀크빌리지 재료·재고 관리</title>
-    <link rel="stylesheet" href="./styles.css?v=20260601-alarms-simple" />
+    <script>
+      window.__MILK_VILLAGE_VERSION__ = fetch("./version.json?ts=" + Date.now(), { cache: "no-store" })
+        .then((response) => response.json())
+        .then(({ version }) => version || "dev")
+        .catch(() => "dev");
+
+      window.__MILK_VILLAGE_VERSION__.then((version) => {
+        const link = document.createElement("link");
+        link.rel = "stylesheet";
+        link.href = `./styles.css?v=${encodeURIComponent(version)}`;
+        document.head.appendChild(link);
+      });
+    </script>
   </head>
   <body>
     <div class="app-shell">
@@ -90,6 +102,12 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-    <script src="./app.js?v=20260601-alarms-simple"></script>
+    <script>
+      window.__MILK_VILLAGE_VERSION__.then((version) => {
+        const script = document.createElement("script");
+        script.src = `./app.js?v=${encodeURIComponent(version)}`;
+        document.body.appendChild(script);
+      });
+    </script>
   </body>
 </html>
