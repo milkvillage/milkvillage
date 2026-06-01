@@ -14,6 +14,7 @@ let applyingRemoteState = false;
 let remoteChannel = null;
 let remotePollTimer = null;
 let lastRemoteUpdatedAt = "";
+let audioContext = null;
 
 const state = {
   screen: "make",
@@ -1617,7 +1618,7 @@ function triggerAlarm(alarm, source = "schedule") {
   if (existingEvent?.status === "triggered") {
     state.activeAlarmEventId = existingEvent.id;
     showAlarmModal(getAlarmDisplayFromEvent(existingEvent));
-    speakAlarm(getAlarmDisplayFromEvent(existingEvent));
+    speakAlarm(getAlarmDisplayFromEvent(existingEvent), source === "test");
     return;
   }
 
@@ -1640,7 +1641,7 @@ function triggerAlarm(alarm, source = "schedule") {
   state.activeAlarmEventId = eventLog.id;
   saveDb();
   showAlarmModal(alarm);
-  speakAlarm(alarm);
+  speakAlarm(alarm, source === "test");
 }
 
 function showAlarmModal(alarm) {
@@ -1746,6 +1747,7 @@ function checkAlarms() {
 
 function unlockAudio() {
   state.audioUnlocked = true;
+  ensureAudioReady();
   speakText("음성 알림이 준비되었습니다.", getVoicePreset(db.settings.defaultSoundId), true);
   render();
   els.soundHelp.hidden = true;
@@ -1767,9 +1769,9 @@ function getVoicePreset(soundId) {
   return db.alarmSounds.find((item) => item.id === soundId) || db.alarmSounds.find((item) => item.isDefault) || normalizeVoicePreset({});
 }
 
-function speakAlarm(alarm) {
+function speakAlarm(alarm, allowWhileLocked = false) {
   const preset = getVoicePreset(alarm.soundId || db.settings.defaultSoundId);
-  speakText(alarm.spokenMessage || alarm.message || alarm.title, preset);
+  speakText(alarm.spokenMessage || alarm.message || alarm.title, preset, allowWhileLocked);
 }
 
 function previewVoicePreset(preset, text = "소모품 확인 및 채우기를 할 시간입니다.") {
@@ -1777,10 +1779,13 @@ function previewVoicePreset(preset, text = "소모품 확인 및 채우기를 �
 }
 
 function speakText(text, preset, allowWhileLocked = false) {
+  if (allowWhileLocked) state.audioUnlocked = true;
   if (!state.audioUnlocked) {
     els.soundHelp.hidden = false;
     return;
   }
+  els.soundHelp.hidden = true;
+  ensureAudioReady();
   if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) {
     playDefaultBeep();
     return;
@@ -1799,26 +1804,42 @@ function speakText(text, preset, allowWhileLocked = false) {
   };
   try {
     window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utterance);
+    window.speechSynthesis.resume?.();
+    playDefaultBeep();
+    window.setTimeout(() => {
+      window.speechSynthesis.speak(utterance);
+    }, 140);
   } catch {
     playDefaultBeep();
     return;
   }
 }
 
-function playDefaultBeep() {
+function ensureAudioReady() {
   try {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
-    const audioContext = new AudioContext();
-    const oscillator = audioContext.createOscillator();
-    const gain = audioContext.createGain();
+    if (!AudioContext) return null;
+    if (!audioContext) audioContext = new AudioContext();
+    if (audioContext.state === "suspended") audioContext.resume?.();
+    return audioContext;
+  } catch {
+    return null;
+  }
+}
+
+function playDefaultBeep() {
+  try {
+    const context = ensureAudioReady();
+    if (!context) return;
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
     oscillator.type = "sine";
     oscillator.frequency.value = 880;
     gain.gain.value = 0.08;
     oscillator.connect(gain);
-    gain.connect(audioContext.destination);
+    gain.connect(context.destination);
     oscillator.start();
-    oscillator.stop(audioContext.currentTime + 0.24);
+    oscillator.stop(context.currentTime + 0.24);
   } catch {
     els.soundHelp.hidden = false;
   }
