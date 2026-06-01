@@ -1045,6 +1045,11 @@ function renderRecipeAdmin(container) {
                     직원 화면에 표시
                   </label>
                 </div>
+                <div class="button-row">
+                  ${state.savedMessage ? `<span class="saved-note">${escapeHtml(state.savedMessage)}</span>` : ""}
+                  <button class="button button--danger" type="button" id="deleteRecipe">재료 삭제</button>
+                  <button class="button button--primary" type="button" id="saveRecipeAdmin">저장</button>
+                </div>
               `
               : ""
           }
@@ -1079,9 +1084,7 @@ function renderRecipeAdmin(container) {
                   }
                 </div>
                 <div class="button-row">
-                  ${state.savedMessage ? `<span class="saved-note">${escapeHtml(state.savedMessage)}</span>` : ""}
                   <button class="button button--ghost" type="button" id="addIngredient">소모품 추가</button>
-                  <button class="button button--primary" type="button" id="saveRecipeAdmin">저장</button>
                 </div>
               `
               : `<p class="muted">배수를 선택하거나 추가해주세요.</p>`
@@ -1111,6 +1114,7 @@ function renderRecipeAdmin(container) {
   container.querySelector("#cloneVariant")?.addEventListener("click", cloneVariant);
   container.querySelector("#addIngredient")?.addEventListener("click", addVariantIngredient);
   container.querySelector("#saveRecipeAdmin")?.addEventListener("click", () => saveRecipeAdmin(container));
+  container.querySelector("#deleteRecipe")?.addEventListener("click", deleteRecipe);
   container.querySelectorAll("[data-remove-ingredient]").forEach((button) => {
     button.addEventListener("click", () => {
       db.recipeVariantIngredients = db.recipeVariantIngredients.filter((item) => item.id !== button.dataset.removeIngredient);
@@ -1219,6 +1223,20 @@ function cloneVariant() {
 function addVariantIngredient() {
   if (!state.selectedVariantId || !db.supplies.length) return;
   db.recipeVariantIngredients.push(makeIngredient(state.selectedVariantId, db.supplies[0].id, 0, db.supplies[0].unit));
+  saveDb();
+  renderAdminScreen();
+}
+
+function deleteRecipe() {
+  const recipe = getRecipe(state.selectedRecipeId);
+  if (!recipe) return;
+  const variantIds = db.recipeVariants.filter((variant) => variant.recipeId === recipe.id).map((variant) => variant.id);
+  db.recipes = db.recipes.filter((item) => item.id !== recipe.id);
+  db.recipeVariants = db.recipeVariants.filter((variant) => variant.recipeId !== recipe.id);
+  db.recipeVariantIngredients = db.recipeVariantIngredients.filter((ingredient) => !variantIds.includes(ingredient.recipeVariantId));
+  state.selectedRecipeId = db.recipes[0]?.id || null;
+  state.selectedVariantId = getVariantsForRecipe(state.selectedRecipeId, false)[0]?.id || null;
+  state.savedMessage = `${recipe.name} 재료를 삭제했습니다.`;
   saveDb();
   renderAdminScreen();
 }
