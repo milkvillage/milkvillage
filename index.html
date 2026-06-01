@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>밀크빌리지 재료·재고 관리</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="top-bar">
+        <div>
+          <p class="eyebrow">Milk Village</p>
+          <h1 id="screenTitle">재료 만들기</h1>
+        </div>
+        <div class="top-actions">
+          <button class="pill-button" id="soundUnlockButton" type="button">
+            <span class="icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19 6a9 9 0 0 1 0 12"/></svg>
+            </span>
+            알림 활성화
+          </button>
+          <button class="pill-button pill-button--admin" id="adminShortcut" type="button">
+            <span class="icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 5 3.4 8 8 9 4.6-1 8-4 8-9V6l-8-3Z"/><path d="M9.5 12.5 11 14l3.5-4"/></svg>
+            </span>
+            관리자
+          </button>
+        </div>
+      </header>
+
+      <main class="dashboard">
+        <nav class="side-nav" aria-label="주요 메뉴">
+          <button class="nav-item is-active" data-screen="make" type="button">
+            <span class="icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M8 3h8l1 6 3 3v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-7l3-3 1-6Z"/><path d="M8 9h8"/><path d="M9 15h6"/></svg>
+            </span>
+            재료 만들기
+          </button>
+          <button class="nav-item" data-screen="orders" type="button">
+            <span class="icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M6 7h15l-2 9H8L6 7Z"/><path d="M6 7 5 3H2"/><path d="M9 21a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z"/><path d="M18 21a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z"/></svg>
+            </span>
+            발주
+          </button>
+          <button class="nav-item" data-screen="admin" type="button">
+            <span class="icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M7 7V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v2"/><path d="M6 7l1 14h10l1-14"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+            </span>
+            관리자
+          </button>
+        </nav>
+
+        <section class="work-area" id="workArea" aria-live="polite"></section>
+      </main>
+    </div>
+
+    <div class="modal-backdrop" id="cancelModal" hidden>
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="cancelTitle">
+        <h2 id="cancelTitle">제조 기록 취소</h2>
+        <p id="cancelMessage">선택한 기록을 취소하고 차감된 재고를 되돌릴까요?</p>
+        <label class="field">
+          <span>취소 사유</span>
+          <input id="cancelReason" type="text" placeholder="선택 입력" />
+        </label>
+        <div class="modal-actions">
+          <button class="button button--ghost" id="cancelClose" type="button">닫기</button>
+          <button class="button button--danger" id="cancelConfirm" type="button">취소 처리</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="alarmModal" hidden>
+      <section class="modal modal--alarm" role="dialog" aria-modal="true" aria-labelledby="alarmTitle">
+        <div class="modal-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M10 5a2 2 0 1 1 4 0 7 7 0 0 1 5 6.7V15l2 3H3l2-3v-3.3A7 7 0 0 1 10 5Z"/><path d="M9.8 21h4.4"/></svg>
+        </div>
+        <h2 id="alarmTitle">소모품 확인</h2>
+        <p id="alarmMessage">소모품 확인 및 채우기를 할 시간입니다.</p>
+        <div class="sound-help" id="soundHelp" hidden>
+          <span>알림음을 사용하려면 알림 활성화 버튼을 눌러주세요.</span>
+          <button class="button button--small" id="soundHelpButton" type="button">알림 활성화</button>
+        </div>
+        <div class="modal-actions">
+          <button class="button button--primary" id="alarmAck" type="button">확인 완료</button>
+          <button class="button button--ghost" id="alarmSnooze" type="button">10분 뒤 다시 알림</button>
+        </div>
+      </section>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
