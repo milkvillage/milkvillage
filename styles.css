@@ -759,6 +759,13 @@ th {
   margin-top: 16px;
 }
 
+.quick-count-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
 .saved-note {
   margin-right: auto;
   color: var(--green);

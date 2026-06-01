@@ -99,7 +99,7 @@ function loadDb() {
   const saved = localStorage.getItem(STORAGE_KEY);
   if (saved) {
     try {
-      return JSON.parse(saved);
+      return normalizeDb(JSON.parse(saved));
     } catch {
       localStorage.removeItem(STORAGE_KEY);
     }
@@ -113,7 +113,7 @@ function normalizeDb(nextDb) {
   const fallback = seedDb();
   return {
     settings: { ...fallback.settings, ...(nextDb?.settings || {}) },
-    supplies: Array.isArray(nextDb?.supplies) ? nextDb.supplies : fallback.supplies,
+    supplies: Array.isArray(nextDb?.supplies) ? nextDb.supplies.map(normalizeSupply) : fallback.supplies,
     recipes: Array.isArray(nextDb?.recipes) ? nextDb.recipes : fallback.recipes,
     recipeVariants: Array.isArray(nextDb?.recipeVariants) ? nextDb.recipeVariants : fallback.recipeVariants,
     recipeVariantIngredients: Array.isArray(nextDb?.recipeVariantIngredients)
@@ -124,6 +124,18 @@ function normalizeDb(nextDb) {
     alarms: Array.isArray(nextDb?.alarms) ? nextDb.alarms.map(normalizeAlarm) : fallback.alarms,
     alarmSounds: Array.isArray(nextDb?.alarmSounds) ? nextDb.alarmSounds.map(normalizeVoicePreset) : fallback.alarmSounds,
     alarmEventLogs: Array.isArray(nextDb?.alarmEventLogs) ? nextDb.alarmEventLogs : fallback.alarmEventLogs,
+  };
+}
+
+function normalizeSupply(supply) {
+  const fallbackQty = Number(supply?.purchaseUnitQty ?? supply?.packageQty ?? 1000);
+  return {
+    ...supply,
+    currentStock: Number(supply?.currentStock || 0),
+    minStock: Number(supply?.minStock || 0),
+    recommendedOrderQty: Number(supply?.recommendedOrderQty || 0),
+    purchaseUnitQty: Number.isFinite(fallbackQty) && fallbackQty > 0 ? fallbackQty : 1000,
+    updatedAt: supply?.updatedAt || supply?.createdAt || nowIso(),
   };
 }
 
@@ -152,6 +164,65 @@ function normalizeVoicePreset(sound) {
     isDefault: Boolean(sound.isDefault),
     createdAt: sound.createdAt || nowIso(),
     updatedAt: sound.updatedAt || nowIso(),
+  };
+}
+
+function recordFreshness(record) {
+  return (
+    record?.updatedAt ||
+    record?.acknowledgedAt ||
+    record?.snoozedUntil ||
+    record?.canceledAt ||
+    record?.triggeredAt ||
+    record?.createdAt ||
+    ""
+  );
+}
+
+function isNewerRecord(candidate, current) {
+  const candidateTime = Date.parse(recordFreshness(candidate));
+  const currentTime = Date.parse(recordFreshness(current));
+  if (!Number.isFinite(candidateTime)) return !current;
+  if (!Number.isFinite(currentTime)) return true;
+  return candidateTime >= currentTime;
+}
+
+function mergeRecordsByFreshness(remoteItems = [], localItems = []) {
+  const merged = new Map();
+  [...remoteItems, ...localItems].forEach((item) => {
+    if (!item?.id) return;
+    const current = merged.get(item.id);
+    if (!current || isNewerRecord(item, current)) merged.set(item.id, item);
+  });
+  return [...merged.values()];
+}
+
+function mergeDbStates(remoteData, localData, { preferRemoteDeletions = false } = {}) {
+  const remoteDb = normalizeDb(remoteData);
+  const localDb = normalizeDb(localData);
+  return {
+    settings: { ...remoteDb.settings, ...localDb.settings },
+    supplies: mergeRecordsByFreshness(remoteDb.supplies, localDb.supplies).map(normalizeSupply),
+    recipes: mergeRecordsByFreshness(remoteDb.recipes, localDb.recipes),
+    recipeVariants: mergeRecordsByFreshness(remoteDb.recipeVariants, localDb.recipeVariants),
+    recipeVariantIngredients: mergeRecordsByFreshness(remoteDb.recipeVariantIngredients, localDb.recipeVariantIngredients),
+    prepBatches: mergeRecordsByFreshness(remoteDb.prepBatches, localDb.prepBatches),
+    inventoryTransactions: mergeRecordsByFreshness(remoteDb.inventoryTransactions, localDb.inventoryTransactions),
+    alarms: (preferRemoteDeletions ? remoteDb.alarms : mergeRecordsByFreshness(remoteDb.alarms, localDb.alarms)).map(normalizeAlarm),
+    alarmSounds: mergeRecordsByFreshness(remoteDb.alarmSounds, localDb.alarmSounds).map(normalizeVoicePreset),
+    alarmEventLogs: mergeRecordsByFreshness(remoteDb.alarmEventLogs, localDb.alarmEventLogs),
+  };
+}
+
+function mergeRemoteStateForApply(remoteData, localData) {
+  const remoteDb = normalizeDb(remoteData);
+  const localDb = normalizeDb(localData);
+  return {
+    ...remoteDb,
+    supplies: mergeRecordsByFreshness(localDb.supplies, remoteDb.supplies).map(normalizeSupply),
+    prepBatches: mergeRecordsByFreshness(localDb.prepBatches, remoteDb.prepBatches),
+    inventoryTransactions: mergeRecordsByFreshness(localDb.inventoryTransactions, remoteDb.inventoryTransactions),
+    alarmEventLogs: mergeRecordsByFreshness(localDb.alarmEventLogs, remoteDb.alarmEventLogs),
   };
 }
 
@@ -195,7 +266,7 @@ function applyRemoteState(row, { force = false, source = "realtime" } = {}) {
   if (!force && nextUpdatedAt && lastRemoteUpdatedAt && new Date(nextUpdatedAt) <= new Date(lastRemoteUpdatedAt)) return;
 
   applyingRemoteState = true;
-  db = normalizeDb(row.data);
+  db = mergeRemoteStateForApply(row.data, db);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
   lastRemoteUpdatedAt = nextUpdatedAt || nowIso();
   syncSelectedIds();
@@ -258,10 +329,30 @@ async function saveRemoteNow() {
   if (!supabaseClient) return;
   remoteSaveTimer = null;
   setRemoteStatus("DB 저장 중", "saving");
+  let dataToSave = normalizeDb(db);
+
+  const { data: remoteRow, error: fetchError } = await supabaseClient
+    .from(REMOTE_TABLE)
+    .select("data, updated_at")
+    .eq("id", REMOTE_STATE_ID)
+    .maybeSingle();
+  if (fetchError) {
+    console.error(fetchError);
+    setRemoteStatus("DB 저장 실패", "error");
+    return;
+  }
+  if (remoteRow?.data) {
+    const remoteChangedSinceLastSync =
+      remoteRow.updated_at && (!lastRemoteUpdatedAt || new Date(remoteRow.updated_at) > new Date(lastRemoteUpdatedAt));
+    dataToSave = mergeDbStates(remoteRow.data, dataToSave, { preferRemoteDeletions: Boolean(remoteChangedSinceLastSync) });
+    db = dataToSave;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+  }
+
   const updatedAt = nowIso();
   const { error } = await supabaseClient.from(REMOTE_TABLE).upsert({
     id: REMOTE_STATE_ID,
-    data: db,
+    data: dataToSave,
     updated_at: updatedAt,
   });
   if (error) {
@@ -378,7 +469,7 @@ function seedDb() {
   };
 }
 
-function makeSupply(id, name, unit, currentStock, minStock, recommendedOrderQty, category) {
+function makeSupply(id, name, unit, currentStock, minStock, recommendedOrderQty, category, purchaseUnitQty = 1000) {
   const createdAt = nowIso();
   return {
     id,
@@ -387,6 +478,7 @@ function makeSupply(id, name, unit, currentStock, minStock, recommendedOrderQty,
     currentStock,
     minStock,
     recommendedOrderQty,
+    purchaseUnitQty,
     category,
     isActive: true,
     createdAt,
@@ -643,6 +735,7 @@ function createPrepBatch(recipeVariantId) {
       recipeName: recipe.name,
       variantLabel: variant.label,
       createdAt,
+      updatedAt: createdAt,
       createdBy: "직원",
       status: "active",
     };
@@ -722,6 +815,7 @@ function cancelPrepBatch(prepBatchId, reason = "") {
   batch.status = "canceled";
   batch.canceledAt = canceledAt;
   batch.cancelReason = reason;
+  batch.updatedAt = canceledAt;
   saveDb();
 }
 
@@ -742,6 +836,7 @@ function renderOrderScreen() {
                     <th>품목명</th>
                     <th>현재 재고</th>
                     <th>기준량</th>
+                    <th>1봉지 용량</th>
                     <th>추천 발주량</th>
                     <th>단위</th>
                     <th>최근 사용</th>
@@ -751,12 +846,15 @@ function renderOrderScreen() {
                   ${orderNeeded
                     .map((supply) => {
                       const latest = getLatestTransactionForSupply(supply.id);
+                      const purchaseUnitQty = Number(supply.purchaseUnitQty || 0);
+                      const packageCount = purchaseUnitQty > 0 ? Math.ceil(Number(supply.recommendedOrderQty || 0) / purchaseUnitQty) : 0;
                       return `
                         <tr>
                           <td><strong>${escapeHtml(supply.name)}</strong><br><span class="badge">발주 필요</span></td>
                           <td><span class="big-number is-warning">${numberText(supply.currentStock)}</span></td>
                           <td>${numberText(supply.minStock)}</td>
-                          <td><span class="big-number">${numberText(supply.recommendedOrderQty)}</span></td>
+                          <td>${purchaseUnitQty > 0 ? `${numberText(purchaseUnitQty)}${escapeHtml(supply.unit)}` : "-"}</td>
+                          <td><span class="big-number">${packageCount > 0 ? `${numberText(packageCount)}봉지` : numberText(supply.recommendedOrderQty)}</span></td>
                           <td>${escapeHtml(supply.unit)}</td>
                           <td>${latest ? `${dateTimeText(latest.createdAt)}<br><span class="muted">${escapeHtml(latest.note || latest.type)}</span>` : "기록 없음"}</td>
                         </tr>
@@ -781,7 +879,7 @@ function renderAdminScreen() {
   const menuLabels = [
     ["recipes", "레시피 관리"],
     ["supplies", "소모품/발주량 관리"],
-    ["adjust", "재고 수동 조정"],
+    ["adjust", "입고/재고 조정"],
     ["alarms", "알림 관리"],
     ["alarmLogs", "알림 기록"],
     ["logs", "전체 로그 확인"],
@@ -1146,6 +1244,7 @@ function renderSuppliesAdmin(container) {
               <th>단위</th>
               <th>현재 재고</th>
               <th>기준량</th>
+              <th>1봉지 용량</th>
               <th>추천 발주량</th>
               <th>카테고리</th>
               <th>사용</th>
@@ -1160,6 +1259,7 @@ function renderSuppliesAdmin(container) {
                     <td><input data-supply-unit="${supply.id}" value="${escapeAttr(supply.unit)}" /></td>
                     <td><input data-supply-stock="${supply.id}" type="number" value="${supply.currentStock}" /></td>
                     <td><input data-supply-min="${supply.id}" type="number" value="${supply.minStock}" /></td>
+                    <td><input data-supply-purchase="${supply.id}" type="number" min="0" value="${supply.purchaseUnitQty || 1000}" /></td>
                     <td><input data-supply-order="${supply.id}" type="number" value="${supply.recommendedOrderQty}" /></td>
                     <td><input data-supply-category="${supply.id}" value="${escapeAttr(supply.category || "")}" /></td>
                     <td><input data-supply-active="${supply.id}" type="checkbox" ${supply.isActive ? "checked" : ""} /></td>
@@ -1189,6 +1289,7 @@ function renderSuppliesAdmin(container) {
       supply.unit = container.querySelector(`[data-supply-unit="${supply.id}"]`).value.trim() || supply.unit;
       supply.currentStock = Number(container.querySelector(`[data-supply-stock="${supply.id}"]`).value || 0);
       supply.minStock = Number(container.querySelector(`[data-supply-min="${supply.id}"]`).value || 0);
+      supply.purchaseUnitQty = Number(container.querySelector(`[data-supply-purchase="${supply.id}"]`).value || 0);
       supply.recommendedOrderQty = Number(container.querySelector(`[data-supply-order="${supply.id}"]`).value || 0);
       supply.category = container.querySelector(`[data-supply-category="${supply.id}"]`).value.trim();
       supply.isActive = Boolean(container.querySelector(`[data-supply-active="${supply.id}"]`).checked);
@@ -1201,11 +1302,50 @@ function renderSuppliesAdmin(container) {
 }
 
 function renderAdjustAdmin(container) {
+  const firstSupply = db.supplies[0] || null;
+  const firstPackageQty = Number(firstSupply?.purchaseUnitQty || 1000);
   container.innerHTML = `
     <div class="admin-card">
+      <h3>입고 추가</h3>
       <div class="form-grid">
         <label class="field">
-          <span>소모품</span>
+          <span>품목</span>
+          <select id="receiveSupply">
+            ${db.supplies.map((supply) => `<option value="${supply.id}">${escapeHtml(supply.name)} (${numberText(supply.currentStock)}${escapeHtml(supply.unit)})</option>`).join("")}
+          </select>
+        </label>
+        <label class="field">
+          <span>1봉지 용량</span>
+          <input id="receiveUnitQty" type="number" min="0" value="${firstPackageQty}" />
+        </label>
+        <label class="field">
+          <span>구매 수량(봉지)</span>
+          <input id="receivePackageCount" type="number" min="0" step="1" value="1" />
+        </label>
+        <label class="field">
+          <span>추가될 재고</span>
+          <input id="receiveTotalQty" type="number" value="${firstPackageQty}" readonly />
+        </label>
+        <label class="field">
+          <span>메모</span>
+          <input id="receiveReason" type="text" value="입고" />
+        </label>
+      </div>
+      <div class="quick-count-row" aria-label="구매 수량 빠른 선택">
+        <button class="button button--ghost button--small" data-package-count="1" type="button">1봉지</button>
+        <button class="button button--ghost button--small" data-package-count="5" type="button">5봉지</button>
+        <button class="button button--ghost button--small" data-package-count="10" type="button">10봉지</button>
+      </div>
+      <div class="button-row">
+        ${state.savedMessage ? `<span class="saved-note">${escapeHtml(state.savedMessage)}</span>` : ""}
+        <button class="button button--primary" id="applyReceive" type="button">입고 추가</button>
+      </div>
+    </div>
+    <div class="admin-card">
+      <h3>실사 재고 조정</h3>
+      <div class="form-grid">
+        <label class="field">
+          <span>품목</span>
           <select id="adjustSupply">
             ${db.supplies.map((supply) => `<option value="${supply.id}">${escapeHtml(supply.name)} (${numberText(supply.currentStock)}${escapeHtml(supply.unit)})</option>`).join("")}
           </select>
@@ -1220,11 +1360,59 @@ function renderAdjustAdmin(container) {
         </label>
       </div>
       <div class="button-row">
-        ${state.savedMessage ? `<span class="saved-note">${escapeHtml(state.savedMessage)}</span>` : ""}
-        <button class="button button--primary" id="applyAdjust" type="button">재고 조정 기록</button>
+        <button class="button button--ghost" id="applyAdjust" type="button">실제 재고로 맞추기</button>
       </div>
     </div>
   `;
+  const receiveSelect = container.querySelector("#receiveSupply");
+  const receiveUnitQty = container.querySelector("#receiveUnitQty");
+  const receivePackageCount = container.querySelector("#receivePackageCount");
+  const receiveTotalQty = container.querySelector("#receiveTotalQty");
+  const updateReceivePreview = () => {
+    const unitQty = Number(receiveUnitQty.value || 0);
+    const packageCount = Number(receivePackageCount.value || 0);
+    receiveTotalQty.value = Math.max(0, unitQty * packageCount);
+  };
+  receiveSelect.addEventListener("change", () => {
+    const supply = getSupply(receiveSelect.value);
+    receiveUnitQty.value = supply?.purchaseUnitQty || 1000;
+    updateReceivePreview();
+  });
+  receiveUnitQty.addEventListener("input", updateReceivePreview);
+  receivePackageCount.addEventListener("input", updateReceivePreview);
+  container.querySelectorAll("[data-package-count]").forEach((button) => {
+    button.addEventListener("click", () => {
+      receivePackageCount.value = button.dataset.packageCount;
+      updateReceivePreview();
+    });
+  });
+  container.querySelector("#applyReceive").addEventListener("click", () => {
+    const supply = getSupply(receiveSelect.value);
+    if (!supply) return;
+    const unitQty = Number(receiveUnitQty.value || 0);
+    const packageCount = Number(receivePackageCount.value || 0);
+    const qtyChange = unitQty * packageCount;
+    if (qtyChange <= 0) return;
+    const createdAt = nowIso();
+    supply.currentStock = Number(supply.currentStock) + qtyChange;
+    supply.purchaseUnitQty = unitQty;
+    supply.updatedAt = createdAt;
+    db.inventoryTransactions.push({
+      id: uid("txn"),
+      supplyId: supply.id,
+      supplyName: supply.name,
+      qtyChange,
+      unit: supply.unit,
+      type: "stock_received",
+      createdAt,
+      note: container.querySelector("#receiveReason").value.trim() || `${numberText(packageCount)}봉지 입고`,
+      packageCount,
+      purchaseUnitQty: unitQty,
+    });
+    state.savedMessage = `${supply.name} ${numberText(packageCount)}봉지, ${numberText(qtyChange)}${supply.unit} 입고 처리했습니다.`;
+    saveDb();
+    renderAdminScreen();
+  });
   const supplySelect = container.querySelector("#adjustSupply");
   const actualInput = container.querySelector("#adjustActual");
   supplySelect.addEventListener("change", () => {
@@ -1505,6 +1693,8 @@ function triggerAlarm(alarm, source = "schedule") {
     snoozedUntil: "",
     status: "triggered",
     source,
+    createdAt: triggeredAt,
+    updatedAt: triggeredAt,
   };
   db.alarmEventLogs.push(eventLog);
   state.activeAlarmEventId = eventLog.id;
@@ -1570,9 +1760,11 @@ function syncAlarmModalFromRemote(source = "realtime") {
 function acknowledgeAlarm() {
   const eventLog = db.alarmEventLogs.find((log) => log.id === state.activeAlarmEventId);
   if (eventLog) {
+    const acknowledgedAt = nowIso();
     eventLog.status = "acknowledged";
-    eventLog.acknowledgedAt = nowIso();
+    eventLog.acknowledgedAt = acknowledgedAt;
     eventLog.acknowledgedBy = "직원";
+    eventLog.updatedAt = acknowledgedAt;
     saveDb();
   }
   closeAlarmModal();
@@ -1584,8 +1776,10 @@ function snoozeAlarm() {
   const alarm = getAlarmDisplayFromEvent(eventLog);
   if (eventLog && alarm) {
     const snoozedUntil = new Date(Date.now() + Number(alarm.snoozeMinutes || 10) * 60 * 1000);
+    const updatedAt = nowIso();
     eventLog.status = "snoozed";
     eventLog.snoozedUntil = snoozedUntil.toISOString();
+    eventLog.updatedAt = updatedAt;
     saveDb();
   }
   closeAlarmModal();
@@ -1596,6 +1790,7 @@ function checkAlarms() {
   const now = new Date();
   const day = dayKeys[now.getDay()];
   const currentTime = localTimeValue(now);
+  let changed = false;
 
   db.alarms
     .filter((alarm) => alarm.isActive && alarm.repeatDays.includes(day) && alarm.time === currentTime)
@@ -1610,8 +1805,10 @@ function checkAlarms() {
       const alarm = db.alarms.find((item) => item.id === log.alarmId);
       if (alarm) triggerAlarm(alarm, "snooze");
       log.status = "missed";
+      log.updatedAt = nowIso();
+      changed = true;
     });
-  saveDb();
+  if (changed) saveDb();
 }
 
 function unlockAudio({ announce = true } = {}) {
@@ -1767,6 +1964,7 @@ function transactionTypeLabel(type) {
     prep_consume: "제조 차감",
     prep_cancel_reverse: "취소 복구",
     manual_adjustment: "수동 조정",
+    stock_received: "입고 추가",
   }[type] || type;
 }
 
