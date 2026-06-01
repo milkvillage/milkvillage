@@ -4,6 +4,11 @@ const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_KLXkL3WkYQXTTUsdE9WZJw_Vw63SWtM
 const REMOTE_TABLE = "milk_village_state";
 const REMOTE_STATE_ID = "main";
 const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const LOG_RETENTION_DAYS = {
+  alarmEventLogs: 30,
+  inventoryTransactions: 90,
+  prepBatches: 90,
+};
 const supabaseClient =
   window.supabase && SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY
     ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
@@ -54,6 +59,10 @@ const els = {
 
 let db = loadDb();
 localRevisionAt = db.meta?.updatedAt || "";
+if (pruneExpiredLogs()) {
+  markDbChanged();
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+}
 state.selectedRecipeId = getActiveRecipes()[0]?.id || null;
 state.selectedVariantId = getVariantsForRecipe(state.selectedRecipeId)[0]?.id || null;
 
@@ -93,6 +102,7 @@ function localTimeValue(date = new Date()) {
 }
 
 function saveDb() {
+  pruneExpiredLogs();
   if (!applyingRemoteState) markDbChanged();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
   queueRemoteSave();
@@ -102,6 +112,38 @@ function markDbChanged() {
   const updatedAt = nowIso();
   db.meta = { ...(db.meta || {}), updatedAt };
   localRevisionAt = updatedAt;
+}
+
+function isWithinRetention(iso, days, referenceDate = new Date()) {
+  if (!iso) return true;
+  const value = new Date(iso).getTime();
+  if (!Number.isFinite(value)) return true;
+  const cutoff = referenceDate.getTime() - days * 24 * 60 * 60 * 1000;
+  return value >= cutoff;
+}
+
+function pruneExpiredLogs(referenceDate = new Date()) {
+  const beforeCounts = {
+    alarmEventLogs: db.alarmEventLogs.length,
+    inventoryTransactions: db.inventoryTransactions.length,
+    prepBatches: db.prepBatches.length,
+  };
+
+  db.alarmEventLogs = db.alarmEventLogs.filter((log) =>
+    isWithinRetention(log.triggeredAt || log.createdAt || log.updatedAt, LOG_RETENTION_DAYS.alarmEventLogs, referenceDate),
+  );
+  db.inventoryTransactions = db.inventoryTransactions.filter((transaction) =>
+    isWithinRetention(transaction.createdAt || transaction.updatedAt, LOG_RETENTION_DAYS.inventoryTransactions, referenceDate),
+  );
+  db.prepBatches = db.prepBatches.filter((batch) =>
+    isWithinRetention(batch.createdAt || batch.updatedAt, LOG_RETENTION_DAYS.prepBatches, referenceDate),
+  );
+
+  return (
+    beforeCounts.alarmEventLogs !== db.alarmEventLogs.length ||
+    beforeCounts.inventoryTransactions !== db.inventoryTransactions.length ||
+    beforeCounts.prepBatches !== db.prepBatches.length
+  );
 }
 
 function loadDb() {
@@ -228,6 +270,8 @@ function applyRemoteState(row, { force = false, source = "realtime" } = {}) {
 
   applyingRemoteState = true;
   db = normalizeDb(row.data);
+  const prunedExpiredLogs = pruneExpiredLogs();
+  if (prunedExpiredLogs) markDbChanged();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
   lastRemoteUpdatedAt = nextUpdatedAt || nowIso();
   localRevisionAt = db.meta?.updatedAt || lastRemoteUpdatedAt;
@@ -236,6 +280,7 @@ function applyRemoteState(row, { force = false, source = "realtime" } = {}) {
   setRemoteStatus(source === "realtime" ? "실시간 동기화됨" : "DB 동기화됨", "online");
   render();
   syncAlarmModalFromRemote(source);
+  if (prunedExpiredLogs) queueRemoteSave();
 }
 
 function syncSelectedIds() {
@@ -1528,6 +1573,8 @@ function renderAlarmLogsAdmin(container) {
   const logs = [...db.alarmEventLogs].sort((a, b) => new Date(b.triggeredAt) - new Date(a.triggeredAt));
   container.innerHTML = `
     <div class="admin-card">
+      <h3>알림 로그</h3>
+      <p class="muted">알림 로그는 최근 ${LOG_RETENTION_DAYS.alarmEventLogs}일만 자동 보관합니다.</p>
       <div class="table-wrap">
         <table>
           <thead>
@@ -1568,6 +1615,7 @@ function renderAllLogsAdmin(container) {
   container.innerHTML = `
     <div class="admin-card">
       <h3>제조 배치 로그</h3>
+      <p class="muted">제조 로그는 최근 ${LOG_RETENTION_DAYS.prepBatches}일만 자동 보관합니다.</p>
       <div class="table-wrap">
         <table>
           <thead>
@@ -1601,6 +1649,7 @@ function renderAllLogsAdmin(container) {
     </div>
     <div class="admin-card">
       <h3>재고 상세 거래 로그</h3>
+      <p class="muted">재고 상세 거래 로그는 최근 ${LOG_RETENTION_DAYS.inventoryTransactions}일만 자동 보관합니다.</p>
       <div class="table-wrap">
         <table>
           <thead>
