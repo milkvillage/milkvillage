@@ -157,6 +157,34 @@ h1 {
   white-space: nowrap;
 }
 
+.remote-status {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: #eef2f4;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.remote-status.is-online {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.remote-status.is-saving {
+  background: var(--amber-soft);
+  color: #7c3d08;
+}
+
+.remote-status.is-error {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
 .pill-button--admin {
   color: #763d0a;
   background: var(--amber-soft);

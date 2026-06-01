@@ -1,5 +1,16 @@
 const STORAGE_KEY = "milk-village-mvp-v1";
+const SUPABASE_URL = "https://irfalbrkahcouaugbqwj.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_KLXkL3WkYQXTTUsdE9WZJw_Vw63SWtM";
+const REMOTE_TABLE = "milk_village_state";
+const REMOTE_STATE_ID = "main";
 const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const supabaseClient =
+  window.supabase && SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY
+    ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
+    : null;
+
+let remoteSaveTimer = null;
+let applyingRemoteState = false;
 
 const state = {
   screen: "make",
@@ -19,6 +30,7 @@ const els = {
   workArea: document.querySelector("#workArea"),
   navButtons: [...document.querySelectorAll(".nav-item")],
   adminShortcut: document.querySelector("#adminShortcut"),
+  remoteStatus: document.querySelector("#remoteStatus"),
   soundUnlockButton: document.querySelector("#soundUnlockButton"),
   cancelModal: document.querySelector("#cancelModal"),
   cancelMessage: document.querySelector("#cancelMessage"),
@@ -75,6 +87,7 @@ function localTimeValue(date = new Date()) {
 
 function saveDb() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+  queueRemoteSave();
 }
 
 function loadDb() {
@@ -89,6 +102,84 @@ function loadDb() {
   const seeded = seedDb();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(seeded));
   return seeded;
+}
+
+function normalizeDb(nextDb) {
+  const fallback = seedDb();
+  return {
+    settings: { ...fallback.settings, ...(nextDb?.settings || {}) },
+    supplies: Array.isArray(nextDb?.supplies) ? nextDb.supplies : fallback.supplies,
+    recipes: Array.isArray(nextDb?.recipes) ? nextDb.recipes : fallback.recipes,
+    recipeVariants: Array.isArray(nextDb?.recipeVariants) ? nextDb.recipeVariants : fallback.recipeVariants,
+    recipeVariantIngredients: Array.isArray(nextDb?.recipeVariantIngredients)
+      ? nextDb.recipeVariantIngredients
+      : fallback.recipeVariantIngredients,
+    prepBatches: Array.isArray(nextDb?.prepBatches) ? nextDb.prepBatches : fallback.prepBatches,
+    inventoryTransactions: Array.isArray(nextDb?.inventoryTransactions) ? nextDb.inventoryTransactions : fallback.inventoryTransactions,
+    alarms: Array.isArray(nextDb?.alarms) ? nextDb.alarms : fallback.alarms,
+    alarmSounds: Array.isArray(nextDb?.alarmSounds) ? nextDb.alarmSounds : fallback.alarmSounds,
+    alarmEventLogs: Array.isArray(nextDb?.alarmEventLogs) ? nextDb.alarmEventLogs : fallback.alarmEventLogs,
+  };
+}
+
+function setRemoteStatus(text, status = "") {
+  if (!els.remoteStatus) return;
+  els.remoteStatus.textContent = text;
+  els.remoteStatus.className = `remote-status${status ? ` is-${status}` : ""}`;
+}
+
+async function initRemoteSync() {
+  if (!supabaseClient) {
+    setRemoteStatus("로컬 저장", "");
+    return;
+  }
+
+  setRemoteStatus("DB 불러오는 중", "saving");
+  try {
+    const { data, error } = await supabaseClient.from(REMOTE_TABLE).select("data").eq("id", REMOTE_STATE_ID).maybeSingle();
+    if (error) throw error;
+
+    if (data?.data) {
+      applyingRemoteState = true;
+      db = normalizeDb(data.data);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+      state.selectedRecipeId = getActiveRecipes()[0]?.id || null;
+      state.selectedVariantId = getVariantsForRecipe(state.selectedRecipeId)[0]?.id || null;
+      applyingRemoteState = false;
+      setRemoteStatus("DB 연결됨", "online");
+      render();
+      return;
+    }
+
+    await saveRemoteNow();
+    setRemoteStatus("DB 연결됨", "online");
+  } catch (error) {
+    applyingRemoteState = false;
+    console.error(error);
+    setRemoteStatus("DB 설정 필요", "error");
+  }
+}
+
+function queueRemoteSave() {
+  if (!supabaseClient || applyingRemoteState) return;
+  window.clearTimeout(remoteSaveTimer);
+  remoteSaveTimer = window.setTimeout(saveRemoteNow, 350);
+}
+
+async function saveRemoteNow() {
+  if (!supabaseClient) return;
+  setRemoteStatus("DB 저장 중", "saving");
+  const { error } = await supabaseClient.from(REMOTE_TABLE).upsert({
+    id: REMOTE_STATE_ID,
+    data: db,
+    updated_at: nowIso(),
+  });
+  if (error) {
+    console.error(error);
+    setRemoteStatus("DB 저장 실패", "error");
+    return;
+  }
+  setRemoteStatus("DB 연결됨", "online");
 }
 
 function seedDb() {
@@ -1589,4 +1680,5 @@ document.addEventListener("keydown", (event) => {
 
 render();
 checkAlarms();
+initRemoteSync();
 setInterval(checkAlarms, 60 * 1000);

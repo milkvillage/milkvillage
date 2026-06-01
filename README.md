@@ -6,6 +6,12 @@
 
 `index.html` 파일을 브라우저로 열면 바로 사용할 수 있습니다.
 
+## Supabase 연결
+
+`supabase-schema.sql` 내용을 Supabase의 SQL Editor에서 한 번 실행하면 여러 기기에서 같은 데이터를 공유합니다.
+
+현재 1차 연결은 `milk_village_state` 테이블의 `main` 행에 앱 상태를 JSON으로 저장하는 방식입니다. 빠르게 태블릿·모바일·노트북 동기화를 확인하기 위한 MVP 구조이며, 이후 운영 안정화 단계에서 정규화된 테이블 구조로 분리할 수 있습니다.
+
 ## 관리자 PIN
 
 초기 PIN은 `1234`입니다. PIN 값은 앱 데이터의 `settings.adminPin`에 저장되는 구조라 이후 설정 화면으로 분리하기 쉽습니다.
