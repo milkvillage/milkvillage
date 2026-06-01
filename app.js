@@ -130,9 +130,12 @@ function normalizeAlarm(alarm) {
   return {
     ...alarm,
     spokenMessage: alarm.spokenMessage || alarm.message || "",
-    soundId: alarm.soundId || "sound_default",
+    message: alarm.spokenMessage || alarm.message || "",
+    soundId: "sound_default",
     repeatDays: Array.isArray(alarm.repeatDays) ? alarm.repeatDays : ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
-    snoozeMinutes: Number(alarm.snoozeMinutes || 10),
+    snoozeMinutes: 10,
+    isActive: true,
+    requiresAcknowledgement: true,
   };
 }
 
@@ -778,7 +781,6 @@ function renderAdminScreen() {
     ["supplies", "소모품/발주량 관리"],
     ["adjust", "재고 수동 조정"],
     ["alarms", "알림 관리"],
-    ["sounds", "음성 알림 관리"],
     ["alarmLogs", "알림 기록"],
     ["logs", "전체 로그 확인"],
   ];
@@ -820,7 +822,6 @@ function renderAdminScreen() {
   if (state.adminMenu === "supplies") renderSuppliesAdmin(body);
   if (state.adminMenu === "adjust") renderAdjustAdmin(body);
   if (state.adminMenu === "alarms") renderAlarmsAdmin(body);
-  if (state.adminMenu === "sounds") renderSoundsAdmin(body);
   if (state.adminMenu === "alarmLogs") renderAlarmLogsAdmin(body);
   if (state.adminMenu === "logs") renderAllLogsAdmin(body);
 }
@@ -1270,7 +1271,7 @@ function renderAlarmsAdmin(container) {
           .map(
             (item) => `
               <button class="list-button ${item.id === alarm.id ? "is-active" : ""}" type="button" data-select-alarm="${item.id}">
-                ${escapeHtml(item.title)} · ${escapeHtml(item.time)}${item.isActive ? "" : " (꺼짐)"}
+                ${escapeHtml(item.title)} · ${escapeHtml(item.time)}
               </button>
             `,
           )
@@ -1287,46 +1288,12 @@ function renderAlarmsAdmin(container) {
           <span>알림 시간</span>
           <input id="alarmTimeInput" type="time" value="${escapeAttr(alarm.time)}" />
         </label>
-        <label class="field">
-          <span>읽을 음성</span>
-          <select id="alarmSoundInput">
-            ${db.alarmSounds.map((sound) => `<option value="${sound.id}" ${sound.id === alarm.soundId ? "selected" : ""}>${escapeHtml(sound.name)}</option>`).join("")}
-          </select>
-        </label>
-        <label class="field">
-          <span>스누즈 분</span>
-          <input id="alarmSnoozeInput" type="number" min="1" value="${alarm.snoozeMinutes}" />
-        </label>
       </div>
-      <label class="field">
-        <span>화면에 보여줄 문구</span>
-        <textarea id="alarmMessageInput">${escapeHtml(alarm.message)}</textarea>
-      </label>
       <label class="field">
         <span>음성으로 읽을 문구</span>
         <textarea id="alarmSpokenMessageInput">${escapeHtml(alarm.spokenMessage || alarm.message)}</textarea>
       </label>
-      <div class="dense-grid">
-        ${dayKeys
-          .map(
-            (day) => `
-              <label class="check-field">
-                <input data-repeat-day="${day}" type="checkbox" ${alarm.repeatDays.includes(day) ? "checked" : ""} />
-                ${dayLabel(day)}
-              </label>
-            `,
-          )
-          .join("")}
-      </div>
       <div class="button-row">
-        <label class="check-field">
-          <input id="alarmActiveInput" type="checkbox" ${alarm.isActive ? "checked" : ""} />
-          알림 사용
-        </label>
-        <label class="check-field">
-          <input id="alarmAckInput" type="checkbox" ${alarm.requiresAcknowledgement ? "checked" : ""} />
-          확인 필요
-        </label>
         ${state.savedMessage ? `<span class="saved-note">${escapeHtml(state.savedMessage)}</span>` : ""}
         <button class="button button--primary" id="saveAlarm" type="button">저장</button>
       </div>
@@ -1353,25 +1320,30 @@ function renderAlarmsAdmin(container) {
     saveDb();
     renderAdminScreen();
   });
-  container.querySelector("#testAlarm").addEventListener("click", () => triggerAlarm(alarm, "test"));
+  container.querySelector("#testAlarm").addEventListener("click", () => {
+    applySimpleAlarmForm(container, alarm);
+    triggerAlarm(alarm, "test");
+  });
   container.querySelector("#saveAlarm").addEventListener("click", () => {
-    const now = nowIso();
-    alarm.title = container.querySelector("#alarmTitleInput").value.trim() || alarm.title;
-    alarm.message = container.querySelector("#alarmMessageInput").value.trim() || alarm.message;
-    alarm.spokenMessage = container.querySelector("#alarmSpokenMessageInput").value.trim() || alarm.message;
-    alarm.time = container.querySelector("#alarmTimeInput").value || alarm.time;
-    alarm.soundId = container.querySelector("#alarmSoundInput").value;
-    alarm.snoozeMinutes = Number(container.querySelector("#alarmSnoozeInput").value || 10);
-    alarm.repeatDays = [...container.querySelectorAll("[data-repeat-day]")]
-      .filter((input) => input.checked)
-      .map((input) => input.dataset.repeatDay);
-    alarm.isActive = Boolean(container.querySelector("#alarmActiveInput").checked);
-    alarm.requiresAcknowledgement = Boolean(container.querySelector("#alarmAckInput").checked);
-    alarm.updatedAt = now;
+    applySimpleAlarmForm(container, alarm);
     state.savedMessage = "저장 완료";
     saveDb();
     renderAlarmsAdminWithSelection(alarm.id);
   });
+}
+
+function applySimpleAlarmForm(container, alarm) {
+  const spokenMessage = container.querySelector("#alarmSpokenMessageInput").value.trim() || "확인이 필요한 알림입니다.";
+  alarm.title = container.querySelector("#alarmTitleInput").value.trim() || "알림";
+  alarm.time = container.querySelector("#alarmTimeInput").value || alarm.time;
+  alarm.message = spokenMessage;
+  alarm.spokenMessage = spokenMessage;
+  alarm.soundId = "sound_default";
+  alarm.snoozeMinutes = 10;
+  alarm.repeatDays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+  alarm.isActive = true;
+  alarm.requiresAcknowledgement = true;
+  alarm.updatedAt = nowIso();
 }
 
 function renderAlarmsAdminWithSelection(alarmId) {
@@ -1381,122 +1353,6 @@ function renderAlarmsAdminWithSelection(alarmId) {
     body.dataset.selectedAlarmId = alarmId;
     renderAlarmsAdmin(body);
   }
-}
-
-function renderSoundsAdmin(container) {
-  const voices = getSpeechVoices();
-  container.innerHTML = `
-    <div class="admin-card">
-      <p class="muted">알림음 파일 대신 입력한 한글 문장을 태블릿이 읽어줍니다. 목소리 목록은 사용하는 브라우저와 기기에 따라 달라질 수 있습니다.</p>
-      <div class="form-grid">
-        <label class="field">
-          <span>음성 설정 이름</span>
-          <input id="soundName" type="text" placeholder="예: 매장 기본 음성" />
-        </label>
-        <label class="field">
-          <span>목소리</span>
-          <select id="voiceSelect">
-            <option value="">브라우저 기본 한국어 음성</option>
-            ${voices
-              .map(
-                (voice) => `
-                  <option value="${escapeAttr(voice.voiceURI)}">${escapeHtml(voice.name)} · ${escapeHtml(voice.lang)}</option>
-                `,
-              )
-              .join("")}
-          </select>
-        </label>
-      </div>
-      <div class="dense-grid">
-        <label class="field">
-          <span>속도</span>
-          <input id="voiceRate" type="number" min="0.5" max="1.5" step="0.05" value="0.92" />
-        </label>
-        <label class="field">
-          <span>톤</span>
-          <input id="voicePitch" type="number" min="0.5" max="1.5" step="0.05" value="1" />
-        </label>
-        <label class="field">
-          <span>볼륨</span>
-          <input id="voiceVolume" type="number" min="0" max="1" step="0.05" value="1" />
-        </label>
-        <label class="field">
-          <span>미리듣기 문구</span>
-          <input id="voicePreviewText" type="text" value="소모품 확인 및 채우기를 할 시간입니다." />
-        </label>
-      </div>
-      <div class="button-row">
-        ${state.savedMessage ? `<span class="saved-note">${escapeHtml(state.savedMessage)}</span>` : ""}
-        <button class="button button--ghost" id="previewNewVoice" type="button">미리듣기</button>
-        <button class="button button--primary" id="addSound" type="button">음성 설정 추가</button>
-      </div>
-    </div>
-    <div class="admin-card">
-      ${db.alarmSounds
-        .map(
-          (sound) => `
-            <div class="sound-row">
-              <div>
-                <strong>${escapeHtml(sound.name)}${sound.isDefault ? " · 기본" : ""}</strong>
-                <div class="muted">속도 ${sound.rate || 0.92} · 톤 ${sound.pitch || 1} · 볼륨 ${sound.volume || 1}</div>
-              </div>
-              <button class="button button--ghost button--small" data-preview-sound="${sound.id}" type="button">미리듣기</button>
-              <button class="button button--ghost button--small" data-default-sound="${sound.id}" type="button">기본 설정</button>
-              <button class="button button--danger button--small" data-delete-sound="${sound.id}" ${sound.id === "sound_default" ? "disabled" : ""} type="button">삭제</button>
-            </div>
-          `,
-        )
-        .join("")}
-    </div>
-  `;
-  const buildVoicePreset = () => {
-    const createdAt = nowIso();
-    return {
-      id: uid("sound"),
-      name: container.querySelector("#soundName").value.trim() || "새 음성 설정",
-      voiceURI: container.querySelector("#voiceSelect").value,
-      lang: "ko-KR",
-      rate: Number(container.querySelector("#voiceRate").value || 0.92),
-      pitch: Number(container.querySelector("#voicePitch").value || 1),
-      volume: Number(container.querySelector("#voiceVolume").value || 1),
-      isDefault: false,
-      createdAt,
-      updatedAt: createdAt,
-    };
-  };
-  container.querySelector("#previewNewVoice").addEventListener("click", () => {
-    previewVoicePreset(buildVoicePreset(), container.querySelector("#voicePreviewText").value);
-  });
-  container.querySelector("#addSound").addEventListener("click", () => {
-    db.alarmSounds.push(buildVoicePreset());
-    state.savedMessage = "음성 설정이 추가되었습니다.";
-    saveDb();
-    renderAdminScreen();
-  });
-  container.querySelectorAll("[data-preview-sound]").forEach((button) => {
-    button.addEventListener("click", () => previewVoicePreset(getVoicePreset(button.dataset.previewSound)));
-  });
-  container.querySelectorAll("[data-default-sound]").forEach((button) => {
-    button.addEventListener("click", () => {
-      db.alarmSounds.forEach((sound) => {
-        sound.isDefault = sound.id === button.dataset.defaultSound;
-      });
-      db.settings.defaultSoundId = button.dataset.defaultSound;
-      state.savedMessage = "기본 음성을 변경했습니다.";
-      saveDb();
-      renderAdminScreen();
-    });
-  });
-  container.querySelectorAll("[data-delete-sound]").forEach((button) => {
-    button.addEventListener("click", () => {
-      db.alarmSounds = db.alarmSounds.filter((sound) => sound.id !== button.dataset.deleteSound);
-      db.alarms.forEach((alarm) => {
-        if (alarm.soundId === button.dataset.deleteSound) alarm.soundId = db.settings.defaultSoundId;
-      });
-      saveDb();
-      renderAdminScreen();
-    });
-  });
 }
 
 function renderAlarmLogsAdmin(container) {
@@ -1774,10 +1630,6 @@ function speakAlarm(alarm, allowWhileLocked = false) {
   speakText(alarm.spokenMessage || alarm.message || alarm.title, preset, allowWhileLocked);
 }
 
-function previewVoicePreset(preset, text = "소모품 확인 및 채우기를 할 시간입니다.") {
-  speakText(text, preset, true);
-}
-
 function speakText(text, preset, allowWhileLocked = false) {
   if (allowWhileLocked) state.audioUnlocked = true;
   if (!state.audioUnlocked) {
@@ -1917,9 +1769,3 @@ render();
 checkAlarms();
 initRemoteSync();
 setInterval(checkAlarms, 60 * 1000);
-
-if (window.speechSynthesis) {
-  window.speechSynthesis.onvoiceschanged = () => {
-    if (state.screen === "admin" && state.adminMenu === "sounds") renderAdminScreen();
-  };
-}

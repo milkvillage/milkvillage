@@ -678,7 +678,6 @@ th {
 }
 
 .ingredient-row,
-.sound-row,
 .alarm-row {
   display: grid;
   grid-template-columns: minmax(150px, 1.2fr) minmax(90px, 0.7fr) minmax(80px, auto);
@@ -687,7 +686,6 @@ th {
   margin-bottom: 10px;
 }
 
-.sound-row,
 .alarm-row {
   grid-template-columns: minmax(170px, 1fr) auto auto auto;
   align-items: center;
@@ -920,7 +918,6 @@ th {
   .form-grid,
   .dense-grid,
   .ingredient-row,
-  .sound-row,
   .alarm-row {
     grid-template-columns: 1fr;
   }
