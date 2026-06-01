@@ -116,9 +116,34 @@ function normalizeDb(nextDb) {
       : fallback.recipeVariantIngredients,
     prepBatches: Array.isArray(nextDb?.prepBatches) ? nextDb.prepBatches : fallback.prepBatches,
     inventoryTransactions: Array.isArray(nextDb?.inventoryTransactions) ? nextDb.inventoryTransactions : fallback.inventoryTransactions,
-    alarms: Array.isArray(nextDb?.alarms) ? nextDb.alarms : fallback.alarms,
-    alarmSounds: Array.isArray(nextDb?.alarmSounds) ? nextDb.alarmSounds : fallback.alarmSounds,
+    alarms: Array.isArray(nextDb?.alarms) ? nextDb.alarms.map(normalizeAlarm) : fallback.alarms,
+    alarmSounds: Array.isArray(nextDb?.alarmSounds) ? nextDb.alarmSounds.map(normalizeVoicePreset) : fallback.alarmSounds,
     alarmEventLogs: Array.isArray(nextDb?.alarmEventLogs) ? nextDb.alarmEventLogs : fallback.alarmEventLogs,
+  };
+}
+
+function normalizeAlarm(alarm) {
+  return {
+    ...alarm,
+    spokenMessage: alarm.spokenMessage || alarm.message || "",
+    soundId: alarm.soundId || "sound_default",
+    repeatDays: Array.isArray(alarm.repeatDays) ? alarm.repeatDays : ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+    snoozeMinutes: Number(alarm.snoozeMinutes || 10),
+  };
+}
+
+function normalizeVoicePreset(sound) {
+  return {
+    id: sound.id,
+    name: sound.name || "기본 음성",
+    voiceURI: sound.voiceURI || "",
+    lang: sound.lang || "ko-KR",
+    rate: Number(sound.rate || 0.92),
+    pitch: Number(sound.pitch || 1),
+    volume: Number(sound.volume || 1),
+    isDefault: Boolean(sound.isDefault),
+    createdAt: sound.createdAt || nowIso(),
+    updatedAt: sound.updatedAt || nowIso(),
   };
 }
 
@@ -272,8 +297,12 @@ function seedDb() {
     alarmSounds: [
       {
         id: "sound_default",
-        name: "기본 알림음",
-        fileUrl: "",
+        name: "기본 한국어 음성",
+        voiceURI: "",
+        lang: "ko-KR",
+        rate: 0.92,
+        pitch: 1,
+        volume: 1,
         isDefault: true,
         createdAt,
         updatedAt: createdAt,
@@ -318,6 +347,7 @@ function makeAlarm(id, title, message, time) {
     id,
     title,
     message,
+    spokenMessage: message,
     time,
     repeatDays: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
     soundId: "sound_default",
@@ -397,7 +427,7 @@ function render() {
     <span class="icon" aria-hidden="true">
       <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19 6a9 9 0 0 1 0 12"/></svg>
     </span>
-    ${state.audioUnlocked ? "알림 준비됨" : "알림 활성화"}
+    ${state.audioUnlocked ? "음성 준비됨" : "음성 알림 활성화"}
   `;
 
   if (state.screen === "make") renderMakeScreen();
@@ -686,7 +716,7 @@ function renderAdminScreen() {
     ["supplies", "소모품/발주량 관리"],
     ["adjust", "재고 수동 조정"],
     ["alarms", "알림 관리"],
-    ["sounds", "알림음 관리"],
+    ["sounds", "음성 알림 관리"],
     ["alarmLogs", "알림 기록"],
     ["logs", "전체 로그 확인"],
   ];
@@ -1196,7 +1226,7 @@ function renderAlarmsAdmin(container) {
           <input id="alarmTimeInput" type="time" value="${escapeAttr(alarm.time)}" />
         </label>
         <label class="field">
-          <span>알림음</span>
+          <span>읽을 음성</span>
           <select id="alarmSoundInput">
             ${db.alarmSounds.map((sound) => `<option value="${sound.id}" ${sound.id === alarm.soundId ? "selected" : ""}>${escapeHtml(sound.name)}</option>`).join("")}
           </select>
@@ -1207,8 +1237,12 @@ function renderAlarmsAdmin(container) {
         </label>
       </div>
       <label class="field">
-        <span>알림 문구</span>
+        <span>화면에 보여줄 문구</span>
         <textarea id="alarmMessageInput">${escapeHtml(alarm.message)}</textarea>
+      </label>
+      <label class="field">
+        <span>음성으로 읽을 문구</span>
+        <textarea id="alarmSpokenMessageInput">${escapeHtml(alarm.spokenMessage || alarm.message)}</textarea>
       </label>
       <div class="dense-grid">
         ${dayKeys
@@ -1262,6 +1296,7 @@ function renderAlarmsAdmin(container) {
     const now = nowIso();
     alarm.title = container.querySelector("#alarmTitleInput").value.trim() || alarm.title;
     alarm.message = container.querySelector("#alarmMessageInput").value.trim() || alarm.message;
+    alarm.spokenMessage = container.querySelector("#alarmSpokenMessageInput").value.trim() || alarm.message;
     alarm.time = container.querySelector("#alarmTimeInput").value || alarm.time;
     alarm.soundId = container.querySelector("#alarmSoundInput").value;
     alarm.snoozeMinutes = Number(container.querySelector("#alarmSnoozeInput").value || 10);
@@ -1287,21 +1322,51 @@ function renderAlarmsAdminWithSelection(alarmId) {
 }
 
 function renderSoundsAdmin(container) {
+  const voices = getSpeechVoices();
   container.innerHTML = `
     <div class="admin-card">
+      <p class="muted">알림음 파일 대신 입력한 한글 문장을 태블릿이 읽어줍니다. 목소리 목록은 사용하는 브라우저와 기기에 따라 달라질 수 있습니다.</p>
       <div class="form-grid">
         <label class="field">
-          <span>알림음 파일</span>
-          <input id="soundFile" type="file" accept=".mp3,.wav,.m4a,.ogg,audio/*" />
+          <span>음성 설정 이름</span>
+          <input id="soundName" type="text" placeholder="예: 매장 기본 음성" />
         </label>
         <label class="field">
-          <span>알림음 이름</span>
-          <input id="soundName" type="text" placeholder="예: 큰 벨소리" />
+          <span>목소리</span>
+          <select id="voiceSelect">
+            <option value="">브라우저 기본 한국어 음성</option>
+            ${voices
+              .map(
+                (voice) => `
+                  <option value="${escapeAttr(voice.voiceURI)}">${escapeHtml(voice.name)} · ${escapeHtml(voice.lang)}</option>
+                `,
+              )
+              .join("")}
+          </select>
+        </label>
+      </div>
+      <div class="dense-grid">
+        <label class="field">
+          <span>속도</span>
+          <input id="voiceRate" type="number" min="0.5" max="1.5" step="0.05" value="0.92" />
+        </label>
+        <label class="field">
+          <span>톤</span>
+          <input id="voicePitch" type="number" min="0.5" max="1.5" step="0.05" value="1" />
+        </label>
+        <label class="field">
+          <span>볼륨</span>
+          <input id="voiceVolume" type="number" min="0" max="1" step="0.05" value="1" />
+        </label>
+        <label class="field">
+          <span>미리듣기 문구</span>
+          <input id="voicePreviewText" type="text" value="소모품 확인 및 채우기를 할 시간입니다." />
         </label>
       </div>
       <div class="button-row">
         ${state.savedMessage ? `<span class="saved-note">${escapeHtml(state.savedMessage)}</span>` : ""}
-        <button class="button button--primary" id="addSound" type="button">알림음 추가</button>
+        <button class="button button--ghost" id="previewNewVoice" type="button">미리듣기</button>
+        <button class="button button--primary" id="addSound" type="button">음성 설정 추가</button>
       </div>
     </div>
     <div class="admin-card">
@@ -1309,7 +1374,10 @@ function renderSoundsAdmin(container) {
         .map(
           (sound) => `
             <div class="sound-row">
-              <strong>${escapeHtml(sound.name)}${sound.isDefault ? " · 기본" : ""}</strong>
+              <div>
+                <strong>${escapeHtml(sound.name)}${sound.isDefault ? " · 기본" : ""}</strong>
+                <div class="muted">속도 ${sound.rate || 0.92} · 톤 ${sound.pitch || 1} · 볼륨 ${sound.volume || 1}</div>
+              </div>
               <button class="button button--ghost button--small" data-preview-sound="${sound.id}" type="button">미리듣기</button>
               <button class="button button--ghost button--small" data-default-sound="${sound.id}" type="button">기본 설정</button>
               <button class="button button--danger button--small" data-delete-sound="${sound.id}" ${sound.id === "sound_default" ? "disabled" : ""} type="button">삭제</button>
@@ -1319,29 +1387,32 @@ function renderSoundsAdmin(container) {
         .join("")}
     </div>
   `;
-  container.querySelector("#addSound").addEventListener("click", async () => {
-    const file = container.querySelector("#soundFile").files[0];
-    const name = container.querySelector("#soundName").value.trim() || file?.name || "새 알림음";
-    if (!file) {
-      alert("알림음 파일을 선택해주세요.");
-      return;
-    }
-    const fileUrl = await readFileAsDataUrl(file);
+  const buildVoicePreset = () => {
     const createdAt = nowIso();
-    db.alarmSounds.push({
+    return {
       id: uid("sound"),
-      name,
-      fileUrl,
+      name: container.querySelector("#soundName").value.trim() || "새 음성 설정",
+      voiceURI: container.querySelector("#voiceSelect").value,
+      lang: "ko-KR",
+      rate: Number(container.querySelector("#voiceRate").value || 0.92),
+      pitch: Number(container.querySelector("#voicePitch").value || 1),
+      volume: Number(container.querySelector("#voiceVolume").value || 1),
       isDefault: false,
       createdAt,
       updatedAt: createdAt,
-    });
-    state.savedMessage = "알림음이 추가되었습니다.";
+    };
+  };
+  container.querySelector("#previewNewVoice").addEventListener("click", () => {
+    previewVoicePreset(buildVoicePreset(), container.querySelector("#voicePreviewText").value);
+  });
+  container.querySelector("#addSound").addEventListener("click", () => {
+    db.alarmSounds.push(buildVoicePreset());
+    state.savedMessage = "음성 설정이 추가되었습니다.";
     saveDb();
     renderAdminScreen();
   });
   container.querySelectorAll("[data-preview-sound]").forEach((button) => {
-    button.addEventListener("click", () => playSoundById(button.dataset.previewSound));
+    button.addEventListener("click", () => previewVoicePreset(getVoicePreset(button.dataset.previewSound)));
   });
   container.querySelectorAll("[data-default-sound]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1349,7 +1420,7 @@ function renderSoundsAdmin(container) {
         sound.isDefault = sound.id === button.dataset.defaultSound;
       });
       db.settings.defaultSoundId = button.dataset.defaultSound;
-      state.savedMessage = "기본 알림음을 변경했습니다.";
+      state.savedMessage = "기본 음성을 변경했습니다.";
       saveDb();
       renderAdminScreen();
     });
@@ -1496,7 +1567,7 @@ function triggerAlarm(alarm, source = "schedule") {
   state.activeAlarmEventId = eventLog.id;
   saveDb();
   showAlarmModal(alarm);
-  playSoundById(alarm.soundId || db.settings.defaultSoundId);
+  speakAlarm(alarm);
 }
 
 function showAlarmModal(alarm) {
@@ -1562,25 +1633,64 @@ function checkAlarms() {
 
 function unlockAudio() {
   state.audioUnlocked = true;
-  playDefaultBeep();
+  speakText("음성 알림이 준비되었습니다.", getVoicePreset(db.settings.defaultSoundId), true);
   render();
   els.soundHelp.hidden = true;
 }
 
-function playSoundById(soundId) {
+function getSpeechVoices() {
+  if (!window.speechSynthesis) return [];
+  return window.speechSynthesis
+    .getVoices()
+    .slice()
+    .sort((a, b) => {
+      const aKo = a.lang.toLowerCase().startsWith("ko") ? 0 : 1;
+      const bKo = b.lang.toLowerCase().startsWith("ko") ? 0 : 1;
+      return aKo - bKo || a.name.localeCompare(b.name);
+    });
+}
+
+function getVoicePreset(soundId) {
+  return db.alarmSounds.find((item) => item.id === soundId) || db.alarmSounds.find((item) => item.isDefault) || normalizeVoicePreset({});
+}
+
+function speakAlarm(alarm) {
+  const preset = getVoicePreset(alarm.soundId || db.settings.defaultSoundId);
+  speakText(alarm.spokenMessage || alarm.message || alarm.title, preset);
+}
+
+function previewVoicePreset(preset, text = "소모품 확인 및 채우기를 할 시간입니다.") {
+  speakText(text, preset, true);
+}
+
+function speakText(text, preset, allowWhileLocked = false) {
   if (!state.audioUnlocked) {
     els.soundHelp.hidden = false;
     return;
   }
-  const sound = db.alarmSounds.find((item) => item.id === soundId) || db.alarmSounds.find((item) => item.isDefault);
-  if (sound?.fileUrl) {
-    const audio = new Audio(sound.fileUrl);
-    audio.play().catch(() => {
-      els.soundHelp.hidden = false;
-    });
+  if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) {
+    playDefaultBeep();
     return;
   }
-  playDefaultBeep();
+  const utterance = new window.SpeechSynthesisUtterance(text);
+  const voices = getSpeechVoices();
+  const selectedVoice = voices.find((voice) => voice.voiceURI === preset?.voiceURI) || voices.find((voice) => voice.lang.toLowerCase().startsWith("ko"));
+  if (selectedVoice) utterance.voice = selectedVoice;
+  utterance.lang = selectedVoice?.lang || preset?.lang || "ko-KR";
+  utterance.rate = Number(preset?.rate || 0.92);
+  utterance.pitch = Number(preset?.pitch || 1);
+  utterance.volume = Number(preset?.volume || 1);
+  utterance.onerror = () => {
+    playDefaultBeep();
+    els.soundHelp.hidden = false;
+  };
+  try {
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
+  } catch {
+    playDefaultBeep();
+    return;
+  }
 }
 
 function playDefaultBeep() {
@@ -1599,15 +1709,6 @@ function playDefaultBeep() {
   } catch {
     els.soundHelp.hidden = false;
   }
-}
-
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
 }
 
 function dayLabel(day) {
@@ -1682,3 +1783,9 @@ render();
 checkAlarms();
 initRemoteSync();
 setInterval(checkAlarms, 60 * 1000);
+
+if (window.speechSynthesis) {
+  window.speechSynthesis.onvoiceschanged = () => {
+    if (state.screen === "admin" && state.adminMenu === "sounds") renderAdminScreen();
+  };
+}
