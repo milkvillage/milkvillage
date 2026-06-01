@@ -760,9 +760,9 @@ th {
 }
 
 .quick-count-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
   gap: 8px;
-  flex-wrap: wrap;
   margin-top: 12px;
 }
 

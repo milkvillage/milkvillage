@@ -794,7 +794,7 @@ function renderOrderScreen() {
                     <th>품목명</th>
                     <th>현재 재고</th>
                     <th>기준량</th>
-                    <th>1봉지 용량</th>
+                    <th>1ea 용량</th>
                     <th>추천 발주량</th>
                     <th>단위</th>
                     <th>최근 사용</th>
@@ -812,7 +812,7 @@ function renderOrderScreen() {
                           <td><span class="big-number is-warning">${numberText(supply.currentStock)}</span></td>
                           <td>${numberText(supply.minStock)}</td>
                           <td>${purchaseUnitQty > 0 ? `${numberText(purchaseUnitQty)}${escapeHtml(supply.unit)}` : "-"}</td>
-                          <td><span class="big-number">${packageCount > 0 ? `${numberText(packageCount)}봉지` : numberText(supply.recommendedOrderQty)}</span></td>
+                          <td><span class="big-number">${packageCount > 0 ? `${numberText(packageCount)}ea` : numberText(supply.recommendedOrderQty)}</span></td>
                           <td>${escapeHtml(supply.unit)}</td>
                           <td>${latest ? `${dateTimeText(latest.createdAt)}<br><span class="muted">${escapeHtml(latest.note || latest.type)}</span>` : "기록 없음"}</td>
                         </tr>
@@ -1202,7 +1202,7 @@ function renderSuppliesAdmin(container) {
               <th>단위</th>
               <th>현재 재고</th>
               <th>기준량</th>
-              <th>1봉지 용량</th>
+              <th>1ea 용량</th>
               <th>추천 발주량</th>
               <th>카테고리</th>
               <th>사용</th>
@@ -1273,11 +1273,11 @@ function renderAdjustAdmin(container) {
           </select>
         </label>
         <label class="field">
-          <span>1봉지 용량</span>
+          <span>1ea 용량</span>
           <input id="receiveUnitQty" type="number" min="0" value="${firstPackageQty}" />
         </label>
         <label class="field">
-          <span>구매 수량(봉지)</span>
+          <span>구매 수량(ea)</span>
           <input id="receivePackageCount" type="number" min="0" step="1" value="1" />
         </label>
         <label class="field">
@@ -1290,9 +1290,10 @@ function renderAdjustAdmin(container) {
         </label>
       </div>
       <div class="quick-count-row" aria-label="구매 수량 빠른 선택">
-        <button class="button button--ghost button--small" data-package-count="1" type="button">1봉지</button>
-        <button class="button button--ghost button--small" data-package-count="5" type="button">5봉지</button>
-        <button class="button button--ghost button--small" data-package-count="10" type="button">10봉지</button>
+        ${Array.from({ length: 12 }, (_, index) => {
+          const count = index + 1;
+          return `<button class="button button--ghost button--small" data-package-count="${count}" type="button">x${count}</button>`;
+        }).join("")}
       </div>
       <div class="button-row">
         ${state.savedMessage ? `<span class="saved-note">${escapeHtml(state.savedMessage)}</span>` : ""}
@@ -1363,11 +1364,11 @@ function renderAdjustAdmin(container) {
       unit: supply.unit,
       type: "stock_received",
       createdAt,
-      note: container.querySelector("#receiveReason").value.trim() || `${numberText(packageCount)}봉지 입고`,
+      note: container.querySelector("#receiveReason").value.trim() || `${numberText(packageCount)}ea 입고`,
       packageCount,
       purchaseUnitQty: unitQty,
     });
-    state.savedMessage = `${supply.name} ${numberText(packageCount)}봉지, ${numberText(qtyChange)}${supply.unit} 입고 처리했습니다.`;
+    state.savedMessage = `${supply.name} ${numberText(packageCount)}ea, ${numberText(qtyChange)}${supply.unit} 입고 처리했습니다.`;
     saveDb();
     renderAdminScreen();
   });
