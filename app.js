@@ -197,6 +197,7 @@ function applyRemoteState(row, { force = false, source = "realtime" } = {}) {
   applyingRemoteState = false;
   setRemoteStatus(source === "realtime" ? "실시간 동기화됨" : "DB 동기화됨", "online");
   render();
+  syncAlarmModalFromRemote(source);
 }
 
 function syncSelectedIds() {
@@ -1612,10 +1613,22 @@ function renderAllLogsAdmin(container) {
 
 function triggerAlarm(alarm, source = "schedule") {
   const triggeredAt = nowIso();
+  const existingEvent = findAlarmEventForMinute(alarm.id, new Date(triggeredAt));
+  if (existingEvent?.status === "triggered") {
+    state.activeAlarmEventId = existingEvent.id;
+    showAlarmModal(getAlarmDisplayFromEvent(existingEvent));
+    speakAlarm(getAlarmDisplayFromEvent(existingEvent));
+    return;
+  }
+
   const eventLog = {
     id: uid("alarm_event"),
     alarmId: alarm.id,
     alarmTitle: alarm.title,
+    alarmMessage: alarm.message,
+    spokenMessage: alarm.spokenMessage || alarm.message || alarm.title,
+    soundId: alarm.soundId || db.settings.defaultSoundId,
+    snoozeMinutes: Number(alarm.snoozeMinutes || 10),
     triggeredAt,
     acknowledgedAt: "",
     acknowledgedBy: "",
@@ -1641,6 +1654,49 @@ function closeAlarmModal() {
   els.alarmModal.hidden = true;
 }
 
+function getOpenAlarmEvent() {
+  const today = todayDateKey();
+  return db.alarmEventLogs
+    .filter((log) => log.status === "triggered" && log.triggeredAt?.slice(0, 10) === today)
+    .sort((a, b) => new Date(b.triggeredAt) - new Date(a.triggeredAt))[0];
+}
+
+function findAlarmEventForMinute(alarmId, date) {
+  const dateKey = todayDateKey(date);
+  const minuteKey = date.toISOString().slice(11, 16);
+  return db.alarmEventLogs.find((log) => log.alarmId === alarmId && log.triggeredAt?.slice(0, 10) === dateKey && log.triggeredAt?.slice(11, 16) === minuteKey);
+}
+
+function getAlarmDisplayFromEvent(eventLog) {
+  const alarm = db.alarms.find((item) => item.id === eventLog?.alarmId);
+  return {
+    ...(alarm || {}),
+    id: alarm?.id || eventLog?.alarmId,
+    title: eventLog?.alarmTitle || alarm?.title || "알림",
+    message: eventLog?.alarmMessage || alarm?.message || "확인이 필요한 알림입니다.",
+    spokenMessage: eventLog?.spokenMessage || alarm?.spokenMessage || alarm?.message || eventLog?.alarmMessage || eventLog?.alarmTitle || "확인이 필요한 알림입니다.",
+    soundId: eventLog?.soundId || alarm?.soundId || db.settings.defaultSoundId,
+    snoozeMinutes: Number(eventLog?.snoozeMinutes || alarm?.snoozeMinutes || 10),
+  };
+}
+
+function syncAlarmModalFromRemote(source = "realtime") {
+  const openEvent = getOpenAlarmEvent();
+  if (!openEvent) {
+    if (state.activeAlarmEventId) {
+      state.activeAlarmEventId = null;
+      closeAlarmModal();
+    }
+    return;
+  }
+
+  const isNewEvent = state.activeAlarmEventId !== openEvent.id;
+  state.activeAlarmEventId = openEvent.id;
+  const alarm = getAlarmDisplayFromEvent(openEvent);
+  showAlarmModal(alarm);
+  if (isNewEvent && source !== "local") speakAlarm(alarm);
+}
+
 function acknowledgeAlarm() {
   const eventLog = db.alarmEventLogs.find((log) => log.id === state.activeAlarmEventId);
   if (eventLog) {
@@ -1655,7 +1711,7 @@ function acknowledgeAlarm() {
 
 function snoozeAlarm() {
   const eventLog = db.alarmEventLogs.find((log) => log.id === state.activeAlarmEventId);
-  const alarm = db.alarms.find((item) => item.id === eventLog?.alarmId);
+  const alarm = getAlarmDisplayFromEvent(eventLog);
   if (eventLog && alarm) {
     const snoozedUntil = new Date(Date.now() + Number(alarm.snoozeMinutes || 10) * 60 * 1000);
     eventLog.status = "snoozed";
@@ -1668,16 +1724,13 @@ function snoozeAlarm() {
 
 function checkAlarms() {
   const now = new Date();
-  const today = todayDateKey(now);
   const day = dayKeys[now.getDay()];
   const currentTime = localTimeValue(now);
 
   db.alarms
     .filter((alarm) => alarm.isActive && alarm.repeatDays.includes(day) && alarm.time === currentTime)
     .forEach((alarm) => {
-      const alreadyTriggered = db.alarmEventLogs.some(
-        (log) => log.alarmId === alarm.id && log.triggeredAt.slice(0, 10) === today && log.triggeredAt.slice(11, 16) === currentTime,
-      );
+      const alreadyTriggered = Boolean(findAlarmEventForMinute(alarm.id, now));
       if (!alreadyTriggered) triggerAlarm(alarm);
     });
 
