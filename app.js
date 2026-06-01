@@ -15,6 +15,7 @@ let remoteChannel = null;
 let remotePollTimer = null;
 let lastRemoteUpdatedAt = "";
 let audioContext = null;
+let pendingSpeech = null;
 
 const state = {
   screen: "make",
@@ -488,11 +489,12 @@ function render() {
   };
   els.screenTitle.textContent = titleMap[state.screen];
   els.navButtons.forEach((button) => button.classList.toggle("is-active", button.dataset.screen === state.screen));
+  els.soundUnlockButton.className = `pill-button ${state.audioUnlocked ? "pill-button--ready" : "pill-button--pending"}`;
   els.soundUnlockButton.innerHTML = `
     <span class="icon" aria-hidden="true">
       <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19 6a9 9 0 0 1 0 12"/></svg>
     </span>
-    ${state.audioUnlocked ? "음성 준비됨" : "음성 알림 활성화"}
+    ${state.audioUnlocked ? "음성 알림 준비됨" : "음성 알림 대기 중"}
   `;
 
   if (state.screen === "make") renderMakeScreen();
@@ -1612,12 +1614,29 @@ function checkAlarms() {
   saveDb();
 }
 
-function unlockAudio() {
+function unlockAudio({ announce = true } = {}) {
   state.audioUnlocked = true;
   ensureAudioReady();
-  speakText("음성 알림이 준비되었습니다.", getVoicePreset(db.settings.defaultSoundId), true);
+  const queuedSpeech = pendingSpeech;
+  pendingSpeech = null;
+  if (queuedSpeech) {
+    speakText(queuedSpeech.text, queuedSpeech.preset, true);
+  } else if (announce) {
+    speakText("음성 알림이 준비되었습니다.", getVoicePreset(db.settings.defaultSoundId), true);
+  } else {
+    primeSpeechSynthesis();
+  }
   render();
   els.soundHelp.hidden = true;
+}
+
+function setupAutomaticAudioUnlock() {
+  const autoUnlock = () => {
+    if (!state.audioUnlocked) unlockAudio({ announce: false });
+  };
+  ["pointerdown", "touchstart", "keydown"].forEach((eventName) => {
+    document.addEventListener(eventName, autoUnlock, { once: true, capture: true });
+  });
 }
 
 function getSpeechVoices() {
@@ -1644,6 +1663,7 @@ function speakAlarm(alarm, allowWhileLocked = false) {
 function speakText(text, preset, allowWhileLocked = false) {
   if (allowWhileLocked) state.audioUnlocked = true;
   if (!state.audioUnlocked) {
+    pendingSpeech = { text, preset };
     els.soundHelp.hidden = false;
     return;
   }
@@ -1675,6 +1695,19 @@ function speakText(text, preset, allowWhileLocked = false) {
   } catch {
     playDefaultBeep();
     return;
+  }
+}
+
+function primeSpeechSynthesis() {
+  if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) return;
+  try {
+    const utterance = new window.SpeechSynthesisUtterance(" ");
+    utterance.volume = 0;
+    utterance.lang = "ko-KR";
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
+  } catch {
+    // Some browsers only unlock speech when an audible utterance is played.
   }
 }
 
@@ -1758,8 +1791,8 @@ els.navButtons.forEach((button) => {
   button.addEventListener("click", () => setScreen(button.dataset.screen));
 });
 els.adminShortcut.addEventListener("click", () => setScreen("admin"));
-els.soundUnlockButton.addEventListener("click", unlockAudio);
-els.soundHelpButton.addEventListener("click", unlockAudio);
+els.soundUnlockButton.addEventListener("click", () => unlockAudio({ announce: true }));
+els.soundHelpButton.addEventListener("click", () => unlockAudio({ announce: true }));
 els.cancelClose.addEventListener("click", closeCancelModal);
 els.cancelConfirm.addEventListener("click", () => {
   cancelPrepBatch(state.pendingCancelBatchId, els.cancelReason.value.trim());
@@ -1779,4 +1812,5 @@ document.addEventListener("keydown", (event) => {
 render();
 checkAlarms();
 initRemoteSync();
+setupAutomaticAudioUnlock();
 setInterval(checkAlarms, 60 * 1000);

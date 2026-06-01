@@ -27,11 +27,11 @@
         </div>
         <div class="top-actions">
           <span class="remote-status" id="remoteStatus">DB 연결 준비</span>
-          <button class="pill-button" id="soundUnlockButton" type="button">
+          <button class="pill-button pill-button--pending" id="soundUnlockButton" type="button" aria-label="음성 알림 상태">
             <span class="icon" aria-hidden="true">
               <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19 6a9 9 0 0 1 0 12"/></svg>
             </span>
-            음성 알림 활성화
+            음성 알림 대기 중
           </button>
           <button class="pill-button pill-button--admin" id="adminShortcut" type="button">
             <span class="icon" aria-hidden="true">
@@ -91,8 +91,8 @@
         <h2 id="alarmTitle">소모품 확인</h2>
         <p id="alarmMessage">소모품 확인 및 채우기를 할 시간입니다.</p>
         <div class="sound-help" id="soundHelp" hidden>
-          <span>음성 알림을 사용하려면 음성 알림 활성화 버튼을 눌러주세요.</span>
-          <button class="button button--small" id="soundHelpButton" type="button">음성 알림 활성화</button>
+          <span>화면을 한 번 터치하면 음성 알림이 준비됩니다.</span>
+          <button class="button button--small" id="soundHelpButton" type="button">지금 음성 준비</button>
         </div>
         <div class="modal-actions">
           <button class="button button--primary" id="alarmAck" type="button">확인 완료</button>

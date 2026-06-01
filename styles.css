@@ -157,6 +157,16 @@ h1 {
   white-space: nowrap;
 }
 
+.pill-button--pending {
+  color: #7c3d08;
+  background: var(--amber-soft);
+}
+
+.pill-button--ready {
+  color: var(--green);
+  background: var(--green-soft);
+}
+
 .remote-status {
   min-height: 36px;
   display: inline-flex;
