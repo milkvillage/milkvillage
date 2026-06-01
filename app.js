@@ -169,7 +169,7 @@ function normalizeDb(nextDb) {
     meta: { ...fallback.meta, ...(nextDb?.meta || {}), updatedAt: nextDb?.meta?.updatedAt || nextDb?.updatedAt || fallback.meta.updatedAt },
     settings: { ...fallback.settings, ...(nextDb?.settings || {}) },
     supplies: Array.isArray(nextDb?.supplies) ? nextDb.supplies.map(normalizeSupply) : fallback.supplies,
-    recipes: Array.isArray(nextDb?.recipes) ? nextDb.recipes : fallback.recipes,
+    recipes: Array.isArray(nextDb?.recipes) ? nextDb.recipes.map(normalizeRecipe) : fallback.recipes,
     recipeVariants: Array.isArray(nextDb?.recipeVariants) ? nextDb.recipeVariants : fallback.recipeVariants,
     recipeVariantIngredients: Array.isArray(nextDb?.recipeVariantIngredients)
       ? nextDb.recipeVariantIngredients
@@ -201,6 +201,15 @@ function normalizeSupply(supply) {
     recommendedOrderEa,
     purchaseUnitQty,
     updatedAt: supply?.updatedAt || supply?.createdAt || nowIso(),
+  };
+}
+
+function normalizeRecipe(recipe, index = 0) {
+  const sortOrder = Number(recipe?.sortOrder);
+  return {
+    ...recipe,
+    sortOrder: Number.isFinite(sortOrder) ? sortOrder : index + 1,
+    updatedAt: recipe?.updatedAt || recipe?.createdAt || nowIso(),
   };
 }
 
@@ -396,6 +405,7 @@ function seedDb() {
       name: "흑당펄",
       category: "재료준비",
       isActive: true,
+      sortOrder: 1,
       createdAt,
       updatedAt: createdAt,
     },
@@ -404,6 +414,7 @@ function seedDb() {
       name: "치즈폼",
       category: "재료준비",
       isActive: true,
+      sortOrder: 2,
       createdAt,
       updatedAt: createdAt,
     },
@@ -537,8 +548,21 @@ function makeAlarm(id, title, message, time) {
   };
 }
 
+function recipeSortValue(recipe, index = 0) {
+  const sortOrder = Number(recipe?.sortOrder);
+  return Number.isFinite(sortOrder) ? sortOrder : index + 1;
+}
+
+function sortRecipes(recipes) {
+  return [...recipes].sort((a, b) => recipeSortValue(a) - recipeSortValue(b) || a.name.localeCompare(b.name, "ko"));
+}
+
+function getRecipesForAdmin() {
+  return sortRecipes(db.recipes);
+}
+
 function getActiveRecipes() {
-  return db.recipes.filter((recipe) => recipe.isActive).sort((a, b) => a.name.localeCompare(b.name, "ko"));
+  return sortRecipes(db.recipes.filter((recipe) => recipe.isActive));
 }
 
 function getRecipe(recipeId) {
@@ -980,7 +1004,7 @@ function renderAdminPin() {
 }
 
 function renderRecipeAdmin(container) {
-  const recipes = db.recipes;
+  const recipes = getRecipesForAdmin();
   if (!state.selectedRecipeId || !getRecipe(state.selectedRecipeId)) {
     state.selectedRecipeId = recipes[0]?.id || null;
   }
@@ -1000,7 +1024,7 @@ function renderRecipeAdmin(container) {
           ${recipes
             .map(
               (item) => `
-                <button class="list-button ${item.id === recipe?.id ? "is-active" : ""}" type="button" data-select-recipe="${item.id}">
+                <button class="list-button list-button--draggable ${item.id === recipe?.id ? "is-active" : ""}" type="button" draggable="true" data-select-recipe="${item.id}" data-recipe-drag="${item.id}" title="드래그해서 순서 변경">
                   ${escapeHtml(item.name)}${item.isActive ? "" : " (비활성)"}
                 </button>
               `,
@@ -1102,6 +1126,7 @@ function renderRecipeAdmin(container) {
       renderAdminScreen();
     });
   });
+  setupRecipeDragSorting(container);
   container.querySelectorAll("[data-select-variant]").forEach((button) => {
     button.addEventListener("click", () => {
       state.selectedVariantId = button.dataset.selectVariant;
@@ -1152,6 +1177,63 @@ function renderIngredientRow(ingredient) {
   `;
 }
 
+function setupRecipeDragSorting(container) {
+  let draggedRecipeId = "";
+  container.querySelectorAll("[data-recipe-drag]").forEach((button) => {
+    button.addEventListener("dragstart", (event) => {
+      draggedRecipeId = button.dataset.recipeDrag;
+      button.classList.add("is-dragging");
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", draggedRecipeId);
+    });
+    button.addEventListener("dragend", () => {
+      draggedRecipeId = "";
+      container.querySelectorAll(".is-dragging, .is-drop-target").forEach((item) => {
+        item.classList.remove("is-dragging", "is-drop-target");
+      });
+    });
+    button.addEventListener("dragover", (event) => {
+      if (!draggedRecipeId || draggedRecipeId === button.dataset.recipeDrag) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      button.classList.add("is-drop-target");
+    });
+    button.addEventListener("dragleave", () => {
+      button.classList.remove("is-drop-target");
+    });
+    button.addEventListener("drop", (event) => {
+      event.preventDefault();
+      const sourceId = event.dataTransfer.getData("text/plain") || draggedRecipeId;
+      const rect = button.getBoundingClientRect();
+      const position = event.clientY > rect.top + rect.height / 2 ? "after" : "before";
+      moveRecipe(sourceId, button.dataset.recipeDrag, position);
+    });
+  });
+}
+
+function moveRecipe(sourceRecipeId, targetRecipeId, position = "before") {
+  if (!sourceRecipeId || !targetRecipeId || sourceRecipeId === targetRecipeId) return;
+  const ordered = getRecipesForAdmin();
+  const sourceIndex = ordered.findIndex((recipe) => recipe.id === sourceRecipeId);
+  const targetIndex = ordered.findIndex((recipe) => recipe.id === targetRecipeId);
+  if (sourceIndex < 0 || targetIndex < 0) return;
+
+  const [movedRecipe] = ordered.splice(sourceIndex, 1);
+  const nextTargetIndex = ordered.findIndex((recipe) => recipe.id === targetRecipeId);
+  ordered.splice(position === "after" ? nextTargetIndex + 1 : nextTargetIndex, 0, movedRecipe);
+  const now = nowIso();
+  ordered.forEach((recipe, index) => {
+    recipe.sortOrder = index + 1;
+    recipe.updatedAt = now;
+  });
+  db.recipes = ordered;
+  state.selectedRecipeId = movedRecipe.id;
+  state.selectedVariantId = getVariantsForRecipe(state.selectedRecipeId, false)[0]?.id || null;
+  state.savedMessage = "재료 순서를 저장했습니다.";
+  saveDb();
+  renderAdminScreen();
+}
+
 function addRecipe() {
   const createdAt = nowIso();
   const recipe = {
@@ -1159,6 +1241,7 @@ function addRecipe() {
     name: "새 재료",
     category: "재료준비",
     isActive: true,
+    sortOrder: getRecipesForAdmin().length + 1,
     createdAt,
     updatedAt: createdAt,
   };
@@ -1234,6 +1317,7 @@ function deleteRecipe() {
   db.recipes = db.recipes.filter((item) => item.id !== recipe.id);
   db.recipeVariants = db.recipeVariants.filter((variant) => variant.recipeId !== recipe.id);
   db.recipeVariantIngredients = db.recipeVariantIngredients.filter((ingredient) => !variantIds.includes(ingredient.recipeVariantId));
+  db.recipes = getRecipesForAdmin().map((item, index) => ({ ...item, sortOrder: index + 1, updatedAt: nowIso() }));
   state.selectedRecipeId = db.recipes[0]?.id || null;
   state.selectedVariantId = getVariantsForRecipe(state.selectedRecipeId, false)[0]?.id || null;
   state.savedMessage = `${recipe.name} 재료를 삭제했습니다.`;
