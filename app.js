@@ -1183,31 +1183,50 @@ function setupRecipeDragSorting(container) {
     button.addEventListener("dragstart", (event) => {
       draggedRecipeId = button.dataset.recipeDrag;
       button.classList.add("is-dragging");
-      event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData("text/plain", draggedRecipeId);
+      if (event.dataTransfer) {
+        const dragImage = document.createElement("canvas");
+        dragImage.width = 1;
+        dragImage.height = 1;
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", draggedRecipeId);
+        event.dataTransfer.setDragImage(dragImage, 0, 0);
+      }
     });
     button.addEventListener("dragend", () => {
       draggedRecipeId = "";
-      container.querySelectorAll(".is-dragging, .is-drop-target").forEach((item) => {
-        item.classList.remove("is-dragging", "is-drop-target");
+      container.querySelectorAll(".is-dragging, .is-drop-before, .is-drop-after").forEach((item) => {
+        item.classList.remove("is-dragging", "is-drop-before", "is-drop-after");
       });
     });
     button.addEventListener("dragover", (event) => {
       if (!draggedRecipeId || draggedRecipeId === button.dataset.recipeDrag) return;
       event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
-      button.classList.add("is-drop-target");
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+      const position = getRecipeDropPosition(event, button);
+      clearRecipeDropMarkers(container);
+      button.classList.add(position === "after" ? "is-drop-after" : "is-drop-before");
     });
     button.addEventListener("dragleave", () => {
-      button.classList.remove("is-drop-target");
+      button.classList.remove("is-drop-before", "is-drop-after");
     });
     button.addEventListener("drop", (event) => {
       event.preventDefault();
-      const sourceId = event.dataTransfer.getData("text/plain") || draggedRecipeId;
-      const rect = button.getBoundingClientRect();
-      const position = event.clientY > rect.top + rect.height / 2 ? "after" : "before";
+      const sourceId = event.dataTransfer?.getData("text/plain") || draggedRecipeId;
+      const position = getRecipeDropPosition(event, button);
+      clearRecipeDropMarkers(container);
       moveRecipe(sourceId, button.dataset.recipeDrag, position);
     });
+  });
+}
+
+function getRecipeDropPosition(event, target) {
+  const rect = target.getBoundingClientRect();
+  return event.clientY > rect.top + rect.height / 2 ? "after" : "before";
+}
+
+function clearRecipeDropMarkers(container) {
+  container.querySelectorAll(".is-drop-before, .is-drop-after").forEach((item) => {
+    item.classList.remove("is-drop-before", "is-drop-after");
   });
 }
 
