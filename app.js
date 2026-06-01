@@ -1253,51 +1253,62 @@ function renderAdjustAdmin(container) {
 }
 
 function renderAlarmsAdmin(container) {
-  if (!db.alarms.length) {
-    db.alarms.push(makeAlarm(uid("alarm"), "새 알림", "알림 내용을 입력해주세요.", localTimeValue()));
-  }
-  const selectedAlarmId = container.dataset.selectedAlarmId || db.alarms[0].id;
-  const alarm = db.alarms.find((item) => item.id === selectedAlarmId) || db.alarms[0];
+  const selectedAlarmId = container.dataset.selectedAlarmId || db.alarms[0]?.id || "";
+  const alarm = db.alarms.find((item) => item.id === selectedAlarmId) || db.alarms[0] || null;
   container.innerHTML = `
     <div class="admin-card">
       <div class="alarm-row">
         <strong>알림 목록</strong>
         <button class="button button--ghost button--small" id="addAlarm" type="button">알림 추가</button>
-        <button class="button button--ghost button--small" id="testAlarm" type="button">테스트 실행</button>
-        <button class="button button--danger button--small" id="deleteAlarm" type="button">삭제</button>
+        <button class="button button--ghost button--small" id="testAlarm" type="button" ${alarm ? "" : "disabled"}>테스트 실행</button>
+        <button class="button button--danger button--small" id="deleteAlarm" type="button" ${alarm ? "" : "disabled"}>삭제</button>
       </div>
       <div class="list-stack">
-        ${db.alarms
-          .map(
-            (item) => `
-              <button class="list-button ${item.id === alarm.id ? "is-active" : ""}" type="button" data-select-alarm="${item.id}">
-                ${escapeHtml(item.title)} · ${escapeHtml(item.time)}
-              </button>
-            `,
-          )
-          .join("")}
+        ${
+          db.alarms.length
+            ? db.alarms
+                .map(
+                  (item) => `
+                    <button class="list-button ${alarm && item.id === alarm.id ? "is-active" : ""}" type="button" data-select-alarm="${item.id}">
+                      ${escapeHtml(item.title)} · ${escapeHtml(item.time)}
+                    </button>
+                  `,
+                )
+                .join("")
+            : `<div class="empty-state">등록된 알림이 없습니다.</div>`
+        }
       </div>
     </div>
-    <div class="admin-card">
-      <div class="form-grid">
-        <label class="field">
-          <span>알림 이름</span>
-          <input id="alarmTitleInput" value="${escapeAttr(alarm.title)}" />
-        </label>
-        <label class="field">
-          <span>알림 시간</span>
-          <input id="alarmTimeInput" type="time" value="${escapeAttr(alarm.time)}" />
-        </label>
-      </div>
-      <label class="field">
-        <span>음성으로 읽을 문구</span>
-        <textarea id="alarmSpokenMessageInput">${escapeHtml(alarm.spokenMessage || alarm.message)}</textarea>
-      </label>
-      <div class="button-row">
-        ${state.savedMessage ? `<span class="saved-note">${escapeHtml(state.savedMessage)}</span>` : ""}
-        <button class="button button--primary" id="saveAlarm" type="button">저장</button>
-      </div>
-    </div>
+    ${
+      alarm
+        ? `
+          <div class="admin-card">
+            <div class="form-grid">
+              <label class="field">
+                <span>알림 이름</span>
+                <input id="alarmTitleInput" value="${escapeAttr(alarm.title)}" />
+              </label>
+              <label class="field">
+                <span>알림 시간</span>
+                <input id="alarmTimeInput" type="time" value="${escapeAttr(alarm.time)}" />
+              </label>
+            </div>
+            <label class="field">
+              <span>음성으로 읽을 문구</span>
+              <textarea id="alarmSpokenMessageInput">${escapeHtml(alarm.spokenMessage || alarm.message)}</textarea>
+            </label>
+            <div class="button-row">
+              ${state.savedMessage ? `<span class="saved-note">${escapeHtml(state.savedMessage)}</span>` : ""}
+              <button class="button button--primary" id="saveAlarm" type="button">저장</button>
+            </div>
+          </div>
+        `
+        : `
+          <div class="admin-card">
+            <div class="empty-state">필요할 때만 알림을 추가해서 사용하세요.</div>
+          </div>
+        `
+    }
   `;
   container.querySelectorAll("[data-select-alarm]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1312,19 +1323,19 @@ function renderAlarmsAdmin(container) {
     renderAlarmsAdminWithSelection(alarm.id);
   });
   container.querySelector("#deleteAlarm").addEventListener("click", () => {
-    if (db.alarms.length <= 1) {
-      alert("알림은 최소 1개 이상 필요합니다.");
-      return;
-    }
+    if (!alarm) return;
     db.alarms = db.alarms.filter((item) => item.id !== alarm.id);
+    container.dataset.selectedAlarmId = db.alarms[0]?.id || "";
     saveDb();
     renderAdminScreen();
   });
   container.querySelector("#testAlarm").addEventListener("click", () => {
+    if (!alarm) return;
     applySimpleAlarmForm(container, alarm);
     triggerAlarm(alarm, "test");
   });
-  container.querySelector("#saveAlarm").addEventListener("click", () => {
+  container.querySelector("#saveAlarm")?.addEventListener("click", () => {
+    if (!alarm) return;
     applySimpleAlarmForm(container, alarm);
     state.savedMessage = "저장 완료";
     saveDb();
