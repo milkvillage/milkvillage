@@ -139,12 +139,22 @@ function normalizeDb(nextDb) {
 
 function normalizeSupply(supply) {
   const fallbackQty = Number(supply?.purchaseUnitQty ?? supply?.packageQty ?? 1000);
+  const purchaseUnitQty = Number.isFinite(fallbackQty) && fallbackQty > 0 ? fallbackQty : 1000;
+  const savedRecommendedEa = Number(supply?.recommendedOrderEa);
+  const savedRecommendedQty = Number(supply?.recommendedOrderQty || 0);
+  const recommendedOrderEa =
+    Number.isFinite(savedRecommendedEa) && savedRecommendedEa >= 0
+      ? savedRecommendedEa
+      : purchaseUnitQty > 0 && savedRecommendedQty > purchaseUnitQty
+        ? Math.ceil(savedRecommendedQty / purchaseUnitQty)
+        : savedRecommendedQty;
   return {
     ...supply,
     currentStock: Number(supply?.currentStock || 0),
     minStock: Number(supply?.minStock || 0),
-    recommendedOrderQty: Number(supply?.recommendedOrderQty || 0),
-    purchaseUnitQty: Number.isFinite(fallbackQty) && fallbackQty > 0 ? fallbackQty : 1000,
+    recommendedOrderQty: recommendedOrderEa,
+    recommendedOrderEa,
+    purchaseUnitQty,
     updatedAt: supply?.updatedAt || supply?.createdAt || nowIso(),
   };
 }
@@ -322,11 +332,11 @@ async function saveRemoteNow() {
 function seedDb() {
   const createdAt = nowIso();
   const supplies = [
-    makeSupply("supply_tapioca", "냉동타피오카펄", "g", 1000, 1000, 5000, "재료"),
-    makeSupply("supply_sugar", "흑설탕", "g", 1000, 1000, 3000, "재료"),
-    makeSupply("supply_milk", "우유", "g", 1000, 500, 3000, "유제품"),
-    makeSupply("supply_cream", "생크림", "g", 1000, 500, 3000, "유제품"),
-    makeSupply("supply_cheese_powder", "치즈파우더", "g", 1000, 300, 1500, "분말"),
+    makeSupply("supply_tapioca", "냉동타피오카펄", "g", 1000, 1000, 5, "재료"),
+    makeSupply("supply_sugar", "흑설탕", "g", 1000, 1000, 3, "재료"),
+    makeSupply("supply_milk", "우유", "g", 1000, 500, 3, "유제품"),
+    makeSupply("supply_cream", "생크림", "g", 1000, 500, 3, "유제품"),
+    makeSupply("supply_cheese_powder", "치즈파우더", "g", 1000, 300, 2, "분말"),
   ];
 
   const recipes = [
@@ -427,7 +437,7 @@ function seedDb() {
   };
 }
 
-function makeSupply(id, name, unit, currentStock, minStock, recommendedOrderQty, category, purchaseUnitQty = 1000) {
+function makeSupply(id, name, unit, currentStock, minStock, recommendedOrderEa, category, purchaseUnitQty = 1000) {
   const createdAt = nowIso();
   return {
     id,
@@ -435,7 +445,8 @@ function makeSupply(id, name, unit, currentStock, minStock, recommendedOrderQty,
     unit,
     currentStock,
     minStock,
-    recommendedOrderQty,
+    recommendedOrderQty: recommendedOrderEa,
+    recommendedOrderEa,
     purchaseUnitQty,
     category,
     isActive: true,
@@ -616,7 +627,7 @@ function renderMakeScreen() {
                       `,
                     )
                     .join("")
-                : `<span class="stock-pill">기준량 이하 품목 없음</span>`
+                : `<span class="stock-pill">발주알림 기준량 이하 품목 없음</span>`
             }
           </div>
         </div>
@@ -783,7 +794,7 @@ function renderOrderScreen() {
     <section class="order-screen" aria-label="발주 필요 품목">
       <div class="panel-header">
         <h2>발주 필요 품목</h2>
-        <p>현재 재고가 기준량 이하인 활성 소모품만 표시합니다.</p>
+        <p>현재 재고가 발주알림 기준량 이하인 활성 소모품만 표시합니다.</p>
       </div>
       ${
         orderNeeded.length
@@ -793,9 +804,9 @@ function renderOrderScreen() {
                   <tr>
                     <th>품목명</th>
                     <th>현재 재고</th>
-                    <th>기준량</th>
+                    <th>발주알림 기준량</th>
                     <th>1ea 용량</th>
-                    <th>추천 발주량</th>
+                    <th>추천 발주량(ea)</th>
                     <th>단위</th>
                     <th>최근 사용</th>
                   </tr>
@@ -805,14 +816,14 @@ function renderOrderScreen() {
                     .map((supply) => {
                       const latest = getLatestTransactionForSupply(supply.id);
                       const purchaseUnitQty = Number(supply.purchaseUnitQty || 0);
-                      const packageCount = purchaseUnitQty > 0 ? Math.ceil(Number(supply.recommendedOrderQty || 0) / purchaseUnitQty) : 0;
+                      const recommendedOrderEa = Number(supply.recommendedOrderEa || supply.recommendedOrderQty || 0);
                       return `
                         <tr>
                           <td><strong>${escapeHtml(supply.name)}</strong><br><span class="badge">발주 필요</span></td>
                           <td><span class="big-number is-warning">${numberText(supply.currentStock)}</span></td>
                           <td>${numberText(supply.minStock)}</td>
                           <td>${purchaseUnitQty > 0 ? `${numberText(purchaseUnitQty)}${escapeHtml(supply.unit)}` : "-"}</td>
-                          <td><span class="big-number">${packageCount > 0 ? `${numberText(packageCount)}ea` : numberText(supply.recommendedOrderQty)}</span></td>
+                          <td><span class="big-number">${numberText(recommendedOrderEa)}ea</span></td>
                           <td>${escapeHtml(supply.unit)}</td>
                           <td>${latest ? `${dateTimeText(latest.createdAt)}<br><span class="muted">${escapeHtml(latest.note || latest.type)}</span>` : "기록 없음"}</td>
                         </tr>
@@ -1201,10 +1212,9 @@ function renderSuppliesAdmin(container) {
               <th>소모품</th>
               <th>단위</th>
               <th>현재 재고</th>
-              <th>기준량</th>
+              <th>발주알림 기준량</th>
               <th>1ea 용량</th>
-              <th>추천 발주량</th>
-              <th>카테고리</th>
+              <th>추천 발주량(ea)</th>
               <th>사용</th>
             </tr>
           </thead>
@@ -1218,8 +1228,7 @@ function renderSuppliesAdmin(container) {
                     <td><input data-supply-stock="${supply.id}" type="number" value="${supply.currentStock}" /></td>
                     <td><input data-supply-min="${supply.id}" type="number" value="${supply.minStock}" /></td>
                     <td><input data-supply-purchase="${supply.id}" type="number" min="0" value="${supply.purchaseUnitQty || 1000}" /></td>
-                    <td><input data-supply-order="${supply.id}" type="number" value="${supply.recommendedOrderQty}" /></td>
-                    <td><input data-supply-category="${supply.id}" value="${escapeAttr(supply.category || "")}" /></td>
+                    <td><input data-supply-order="${supply.id}" type="number" min="0" step="1" value="${supply.recommendedOrderEa || supply.recommendedOrderQty || 0}" /></td>
                     <td><input data-supply-active="${supply.id}" type="checkbox" ${supply.isActive ? "checked" : ""} /></td>
                   </tr>
                 `,
@@ -1248,8 +1257,8 @@ function renderSuppliesAdmin(container) {
       supply.currentStock = Number(container.querySelector(`[data-supply-stock="${supply.id}"]`).value || 0);
       supply.minStock = Number(container.querySelector(`[data-supply-min="${supply.id}"]`).value || 0);
       supply.purchaseUnitQty = Number(container.querySelector(`[data-supply-purchase="${supply.id}"]`).value || 0);
-      supply.recommendedOrderQty = Number(container.querySelector(`[data-supply-order="${supply.id}"]`).value || 0);
-      supply.category = container.querySelector(`[data-supply-category="${supply.id}"]`).value.trim();
+      supply.recommendedOrderEa = Number(container.querySelector(`[data-supply-order="${supply.id}"]`).value || 0);
+      supply.recommendedOrderQty = supply.recommendedOrderEa;
       supply.isActive = Boolean(container.querySelector(`[data-supply-active="${supply.id}"]`).checked);
       supply.updatedAt = now;
     });
