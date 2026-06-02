@@ -96,6 +96,33 @@ h1 {
   flex-wrap: wrap;
 }
 
+.clock-display {
+  min-height: 46px;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f7fafb;
+  color: var(--muted);
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.clock-display span {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.clock-display strong {
+  color: var(--text);
+  font-size: 20px;
+  font-weight: 900;
+}
+
 .dashboard {
   min-height: 0;
   display: grid;
@@ -1449,6 +1476,13 @@ th {
   .top-actions {
     width: 100%;
     justify-content: stretch;
+  }
+
+  .clock-display,
+  .remote-status {
+    flex: 1 1 170px;
+    align-items: center;
+    justify-content: center;
   }
 
   .pill-button {

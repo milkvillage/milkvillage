@@ -50,6 +50,7 @@ const state = {
 
 const els = {
   screenTitle: document.querySelector("#screenTitle"),
+  currentDateTime: document.querySelector("#currentDateTime"),
   workArea: document.querySelector("#workArea"),
   navButtons: [...document.querySelectorAll(".nav-item")],
   adminShortcut: document.querySelector("#adminShortcut"),
@@ -122,6 +123,31 @@ function dateTimeText(iso) {
     minute: "2-digit",
     hour12: false,
   }).format(new Date(iso));
+}
+
+function updateCurrentDateTime() {
+  if (!els.currentDateTime) return;
+  const now = new Date();
+  const dateText = new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+  }).format(now);
+  const timeText = new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(now);
+
+  els.currentDateTime.dateTime = now.toISOString();
+  els.currentDateTime.innerHTML = `
+    <span>${dateText}</span>
+    <strong>${timeText}</strong>
+  `;
 }
 
 function localTimeValue(date = new Date()) {
@@ -3150,8 +3176,10 @@ document.addEventListener("visibilitychange", () => {
 });
 
 render();
+updateCurrentDateTime();
 prepareSpeechVoices();
 checkAlarms();
 initRemoteSync();
 setupAutomaticAudioUnlock();
+setInterval(updateCurrentDateTime, 1000);
 setInterval(checkAlarms, 15 * 1000);
