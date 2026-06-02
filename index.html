@@ -34,12 +34,12 @@
         <div class="top-actions">
           <time class="clock-display" id="currentDateTime" aria-label="현재 날짜와 시간"></time>
           <span class="remote-status" id="remoteStatus">DB 연결 준비</span>
-          <button class="pill-button pill-button--pending" id="soundUnlockButton" type="button" aria-label="음성 알림 상태">
+          <span class="pill-button pill-button--pending" id="soundUnlockButton" role="status" aria-live="polite" aria-label="음성 상태: OFF">
             <span class="icon" aria-hidden="true">
               <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19 6a9 9 0 0 1 0 12"/></svg>
             </span>
-            음성 알림 대기
-          </button>
+            음성 OFF
+          </span>
           <button class="pill-button pill-button--admin" id="adminShortcut" type="button">
             <span class="icon" aria-hidden="true">
               <svg viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 5 3.4 8 8 9 4.6-1 8-4 8-9V6l-8-3Z"/><path d="M9.5 12.5 11 14l3.5-4"/></svg>

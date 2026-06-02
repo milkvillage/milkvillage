@@ -184,6 +184,11 @@ h1 {
   white-space: nowrap;
 }
 
+.pill-button[role="status"] {
+  cursor: default;
+  user-select: none;
+}
+
 .pill-button--pending {
   color: #7c3d08;
   background: var(--amber-soft);
@@ -638,7 +643,7 @@ th {
 .list-button--draggable {
   position: relative;
   cursor: grab;
-  touch-action: none;
+  touch-action: pan-y;
 }
 
 .list-button--draggable:active {
