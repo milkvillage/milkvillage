@@ -21,6 +21,29 @@ const LOG_RETENTION_DAYS = {
   operationRecords: 180,
 };
 const ALARM_HISTORY_LIMIT = 8;
+const ALARM_SOUND_BUCKET = "alarm-sounds";
+const ALARM_SOUND_PUBLIC_BASE_URL = `${SUPABASE_URL}/storage/v1/object/public/${ALARM_SOUND_BUCKET}`;
+const DEFAULT_ALARM_SOUND_ID = "sound_supplies_check";
+const INTERNAL_ALARM_SOUNDS = [
+  {
+    id: "sound_store_cleanliness",
+    name: "위생 관리 점검",
+    fileName: "store-cleanliness-check.mp3",
+    url: `${ALARM_SOUND_PUBLIC_BASE_URL}/store-cleanliness-check.mp3`,
+  },
+  {
+    id: "sound_pre_peak_supplies",
+    name: "피크 전 소모품 준비",
+    fileName: "pre-peak-supplies.mp3",
+    url: `${ALARM_SOUND_PUBLIC_BASE_URL}/pre-peak-supplies.mp3`,
+  },
+  {
+    id: DEFAULT_ALARM_SOUND_ID,
+    name: "소모품 확인",
+    fileName: "supplies-check.mp3",
+    url: `${ALARM_SOUND_PUBLIC_BASE_URL}/supplies-check.mp3`,
+  },
+];
 const supabaseClient =
   window.supabase && SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY
     ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
@@ -35,8 +58,11 @@ let localRevisionAt = "";
 let pendingSpeech = null;
 let alarmSpeechLoopTimer = null;
 let alarmSpeechRetryTimer = null;
+let alarmSoundRetryTimer = null;
 let speechKeepAliveTimer = null;
 let activeAlarmSoundEventId = "";
+let alarmAudio = null;
+let previewAudio = null;
 let lastSpeechUnlockAttemptAt = 0;
 let wakeLock = null;
 let audioContext = null;
@@ -251,16 +277,19 @@ function normalizeDb(nextDb) {
     prepBatches: Array.isArray(nextDb?.prepBatches) ? nextDb.prepBatches : fallback.prepBatches,
     inventoryTransactions: Array.isArray(nextDb?.inventoryTransactions) ? nextDb.inventoryTransactions : fallback.inventoryTransactions,
     alarms: Array.isArray(nextDb?.alarms) ? nextDb.alarms.map(normalizeAlarm) : fallback.alarms,
-    alarmSounds: Array.isArray(nextDb?.alarmSounds) ? nextDb.alarmSounds.map(normalizeVoicePreset) : fallback.alarmSounds,
+    alarmSounds: normalizeAlarmSounds(nextDb?.alarmSounds, fallback.alarmSounds),
     alarmEventLogs: Array.isArray(nextDb?.alarmEventLogs) ? nextDb.alarmEventLogs : fallback.alarmEventLogs,
     operations: normalizeOperations(nextDb?.operations, fallback.operations),
   };
 }
 
 function normalizeSettings(settings, fallbackSettings) {
+  const defaultSoundId =
+    settings?.defaultSoundId && settings.defaultSoundId !== "sound_default" ? settings.defaultSoundId : fallbackSettings.defaultSoundId;
   return {
     ...fallbackSettings,
     ...(settings || {}),
+    defaultSoundId,
     alarmTitleHistory: normalizeTextHistory(settings?.alarmTitleHistory || fallbackSettings?.alarmTitleHistory),
     alarmMessageHistory: normalizeTextHistory(settings?.alarmMessageHistory || fallbackSettings?.alarmMessageHistory),
   };
@@ -357,12 +386,13 @@ function normalizeRecipe(recipe, index = 0) {
 
 function normalizeAlarm(alarm) {
   const isDraft = Boolean(alarm.isDraft);
+  const soundId = alarm.soundId && alarm.soundId !== "sound_default" ? alarm.soundId : DEFAULT_ALARM_SOUND_ID;
   return {
     ...alarm,
     spokenMessage: alarm.spokenMessage || alarm.message || "",
     message: alarm.spokenMessage || alarm.message || "",
     time: normalizeAlarmTime(alarm.time),
-    soundId: "sound_default",
+    soundId,
     repeatDays: normalizeAlarmDays(alarm.repeatDays),
     snoozeMinutes: 10,
     isDraft,
@@ -389,6 +419,8 @@ function normalizeVoicePreset(sound) {
   return {
     id: sound.id,
     name: sound.name || "기본 음성",
+    fileName: sound.fileName || "",
+    url: sound.url || "",
     voiceURI: sound.voiceURI || "",
     lang: sound.lang || "ko-KR",
     rate: Number(sound.rate || 0.92),
@@ -398,6 +430,18 @@ function normalizeVoicePreset(sound) {
     createdAt: sound.createdAt || nowIso(),
     updatedAt: sound.updatedAt || nowIso(),
   };
+}
+
+function normalizeAlarmSounds(values, fallbackValues = []) {
+  const byId = new Map();
+  [...(Array.isArray(fallbackValues) ? fallbackValues : []), ...(Array.isArray(values) ? values : [])].forEach((sound) => {
+    const normalized = normalizeVoicePreset(sound);
+    if (normalized.id && normalized.id !== "sound_default") byId.set(normalized.id, normalized);
+  });
+  INTERNAL_ALARM_SOUNDS.forEach((sound) => {
+    byId.set(sound.id, normalizeVoicePreset({ ...byId.get(sound.id), ...sound, isDefault: sound.id === DEFAULT_ALARM_SOUND_ID }));
+  });
+  return [...byId.values()];
 }
 
 function setRemoteStatus(text, status = "") {
@@ -641,7 +685,7 @@ function seedDb() {
     },
     settings: {
       adminPin: "1234",
-      defaultSoundId: "sound_default",
+      defaultSoundId: DEFAULT_ALARM_SOUND_ID,
       alarmTitleHistory: [],
       alarmMessageHistory: [],
     },
@@ -655,20 +699,17 @@ function seedDb() {
       makeAlarm("alarm_supplies", "소모품 확인", "소모품 확인 및 채우기를 할 시간입니다.", "14:00"),
       makeAlarm("alarm_cleaning", "위생 작업 확인", "위생 작업을 확인 및 수행해주세요.", "17:00"),
     ],
-    alarmSounds: [
-      {
-        id: "sound_default",
-        name: "기본 한국어 음성",
-        voiceURI: "",
-        lang: "ko-KR",
-        rate: 0.92,
-        pitch: 1,
-        volume: 1,
-        isDefault: true,
-        createdAt,
-        updatedAt: createdAt,
-      },
-    ],
+    alarmSounds: INTERNAL_ALARM_SOUNDS.map((sound) => ({
+      ...sound,
+      voiceURI: "",
+      lang: "ko-KR",
+      rate: 0.92,
+      pitch: 1,
+      volume: 1,
+      isDefault: sound.id === DEFAULT_ALARM_SOUND_ID,
+      createdAt,
+      updatedAt: createdAt,
+    })),
     alarmEventLogs: [],
     operations: makeDefaultOperations(createdAt),
   };
@@ -714,7 +755,7 @@ function makeAlarm(id, title, message, time) {
     spokenMessage: message,
     time,
     repeatDays: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
-    soundId: "sound_default",
+    soundId: DEFAULT_ALARM_SOUND_ID,
     isActive: true,
     requiresAcknowledgement: true,
     snoozeMinutes: 10,
@@ -793,6 +834,41 @@ function renderAlarmDayControls(days) {
           .join("")}
       </div>
     </fieldset>
+  `;
+}
+
+function renderAlarmSoundOptions(selectedSoundId) {
+  return db.alarmSounds
+    .map(
+      (sound) => `
+        <option value="${escapeAttr(sound.id)}" ${sound.id === selectedSoundId ? "selected" : ""}>${escapeHtml(sound.name)}</option>
+      `,
+    )
+    .join("");
+}
+
+function renderAlarmSoundTestSection() {
+  return `
+    <section class="alarm-sound-test-panel" aria-label="알림음 테스트">
+      <div class="alarm-panel-heading">
+        <h3>알림음 테스트</h3>
+      </div>
+      <div class="alarm-sound-test-list">
+        ${db.alarmSounds
+          .map(
+            (sound) => `
+              <div class="alarm-sound-test-row">
+                <div>
+                  <strong>${escapeHtml(sound.name)}</strong>
+                  <span>${escapeHtml(sound.fileName || "Supabase Storage")}</span>
+                </div>
+                <button class="button button--ghost button--small" type="button" data-test-alarm-sound="${escapeAttr(sound.id)}">테스트 재생</button>
+              </div>
+            `,
+          )
+          .join("")}
+      </div>
+    </section>
   `;
 }
 
@@ -2605,6 +2681,12 @@ function renderAlarmsAdmin(container) {
               </label>
             </div>
             ${renderAlarmDayControls(alarm.repeatDays)}
+            <label class="field alarm-sound-field">
+              <span>알림음</span>
+              <select id="alarmSoundInput">
+                ${renderAlarmSoundOptions(alarm.soundId || db.settings.defaultSoundId)}
+              </select>
+            </label>
             <label class="field alarm-message-field">
               <span>음성으로 읽을 문구</span>
               <textarea id="alarmSpokenMessageInput" placeholder="예: 소모품 확인하고 부족한 품목을 채워주세요.">${escapeHtml(alarmMessageValue)}</textarea>
@@ -2618,6 +2700,7 @@ function renderAlarmsAdmin(container) {
             `
             : `<div class="empty-state">필요할 때만 알림을 추가해서 사용하세요.</div>`
         }
+        ${renderAlarmSoundTestSection()}
       </section>
     </div>
   `;
@@ -2674,6 +2757,9 @@ function renderAlarmsAdmin(container) {
     state.selectedAlarmId = alarm.id;
     renderAdminScreen();
   });
+  container.querySelectorAll("[data-test-alarm-sound]").forEach((button) => {
+    button.addEventListener("click", () => testAlarmSound(button.dataset.testAlarmSound));
+  });
 }
 
 function validateAlarmForm(container) {
@@ -2702,7 +2788,7 @@ function applySimpleAlarmForm(container, alarm, { activate = false } = {}) {
   alarm.time = getAlarmTimeFromForm(container);
   alarm.message = spokenMessage;
   alarm.spokenMessage = spokenMessage;
-  alarm.soundId = "sound_default";
+  alarm.soundId = container.querySelector("#alarmSoundInput")?.value || db.settings.defaultSoundId || DEFAULT_ALARM_SOUND_ID;
   alarm.snoozeMinutes = 10;
   alarm.repeatDays = getAlarmDaysFromForm(container);
   if (activate) {
@@ -3262,20 +3348,91 @@ function startAlarmSound(alarm, { forceRestart = false, immediate = false } = {}
   activeAlarmSoundEventId = soundEventId;
   requestWakeLock();
   primeAudioOutput();
+  playAlarmFileSound(alarm, { eventId: soundEventId });
   speakAlarm(alarm, true, { repeat: true, eventId: soundEventId, immediate });
 }
 
 function stopAlarmSound() {
   window.clearTimeout(alarmSpeechLoopTimer);
   window.clearTimeout(alarmSpeechRetryTimer);
+  window.clearTimeout(alarmSoundRetryTimer);
   alarmSpeechLoopTimer = null;
   alarmSpeechRetryTimer = null;
+  alarmSoundRetryTimer = null;
   activeAlarmSoundEventId = "";
   pendingSpeech = null;
+  stopAlarmFileSound();
   try {
     window.speechSynthesis?.cancel();
   } catch {
     // Speech synthesis can be unavailable or locked by the browser.
+  }
+}
+
+function stopAlarmFileSound() {
+  if (!alarmAudio) return;
+  try {
+    alarmAudio.pause();
+    alarmAudio.currentTime = 0;
+  } catch {
+    // Audio elements can fail if the browser has already released them.
+  }
+  alarmAudio = null;
+}
+
+function playAlarmFileSound(alarm, { eventId = "" } = {}) {
+  const sound = getVoicePreset(alarm.soundId || db.settings.defaultSoundId);
+  if (!sound?.url) return false;
+  const soundEventId = eventId || activeAlarmSoundEventId;
+  stopAlarmFileSound();
+  alarmAudio = new Audio(sound.url);
+  alarmAudio.loop = true;
+  alarmAudio.preload = "auto";
+  alarmAudio.volume = Number(sound.volume || 1);
+  alarmAudio.addEventListener("playing", markSpeechReady, { once: true });
+  alarmAudio.addEventListener(
+    "error",
+    () => {
+      if (soundEventId && soundEventId !== activeAlarmSoundEventId) return;
+      markSpeechOff();
+      window.clearTimeout(alarmSoundRetryTimer);
+      alarmSoundRetryTimer = window.setTimeout(() => {
+        if (!soundEventId || soundEventId === activeAlarmSoundEventId) playAlarmFileSound(alarm, { eventId: soundEventId });
+      }, 1200);
+    },
+    { once: true },
+  );
+  alarmAudio
+    .play()
+    .then(markSpeechReady)
+    .catch(() => {
+      if (soundEventId && soundEventId !== activeAlarmSoundEventId) return;
+      markSpeechOff();
+      window.clearTimeout(alarmSoundRetryTimer);
+      alarmSoundRetryTimer = window.setTimeout(() => {
+        if (!soundEventId || soundEventId === activeAlarmSoundEventId) playAlarmFileSound(alarm, { eventId: soundEventId });
+      }, 1200);
+    });
+  return true;
+}
+
+function testAlarmSound(soundId) {
+  const sound = getVoicePreset(soundId);
+  if (!sound?.url) {
+    alert("알림음 파일 URL이 없습니다.");
+    return;
+  }
+  try {
+    previewAudio?.pause();
+    previewAudio = new Audio(sound.url);
+    previewAudio.volume = Number(sound.volume || 1);
+    previewAudio.play().then(markSpeechReady).catch(() => {
+      markSpeechOff();
+      alert("알림음을 재생할 수 없습니다. 화면을 한 번 터치한 뒤 다시 시도해주세요.");
+    });
+  } catch {
+    markSpeechOff();
+    alert("알림음을 재생할 수 없습니다.");
   }
 }
 

@@ -894,6 +894,51 @@ th {
   margin-top: 14px;
 }
 
+.alarm-sound-field,
+.alarm-sound-test-panel {
+  margin-top: 14px;
+}
+
+.alarm-sound-test-panel {
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.alarm-sound-test-list {
+  display: grid;
+  gap: 10px;
+}
+
+.alarm-sound-test-row {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f7fafb;
+}
+
+.alarm-sound-test-row div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.alarm-sound-test-row strong,
+.alarm-sound-test-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.alarm-sound-test-row span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .alarm-message-field textarea {
   min-height: 150px;
   font-size: 18px;
