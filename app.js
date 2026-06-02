@@ -921,6 +921,16 @@ function setScreen(screen) {
   render();
 }
 
+function renderSoundStatus() {
+  els.soundUnlockButton.className = `pill-button ${state.audioUnlocked ? "pill-button--ready" : "pill-button--pending"}`;
+  els.soundUnlockButton.innerHTML = `
+    <span class="icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19 6a9 9 0 0 1 0 12"/></svg>
+    </span>
+    ${state.audioUnlocked ? "음성 신호 전송됨" : "음성 자동준비 중"}
+  `;
+}
+
 function render() {
   const titleMap = {
     make: "재료 만들기",
@@ -930,13 +940,7 @@ function render() {
   };
   els.screenTitle.textContent = titleMap[state.screen];
   els.navButtons.forEach((button) => button.classList.toggle("is-active", button.dataset.screen === state.screen));
-  els.soundUnlockButton.className = `pill-button ${state.audioUnlocked ? "pill-button--ready" : "pill-button--pending"}`;
-  els.soundUnlockButton.innerHTML = `
-    <span class="icon" aria-hidden="true">
-      <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19 6a9 9 0 0 1 0 12"/></svg>
-    </span>
-    ${state.audioUnlocked ? "음성 신호 전송됨" : "음성 자동준비 중"}
-  `;
+  renderSoundStatus();
 
   if (state.screen === "make") renderMakeScreen();
   if (state.screen === "orders") renderOrderScreen();
@@ -2800,12 +2804,12 @@ function markSpeechReady() {
   state.audioUnlocked = true;
   if (els.soundHelp) els.soundHelp.hidden = true;
   startSpeechKeepAlive();
-  if (wasLocked) render();
+  if (wasLocked) renderSoundStatus();
 }
 
 function showSpeechTouchHelp() {
   if (state.audioUnlocked) return;
-  render();
+  renderSoundStatus();
 }
 
 function unlockAudio({ announce = true, immediate = false } = {}) {
@@ -2835,9 +2839,14 @@ function unlockAudio({ announce = true, immediate = false } = {}) {
   if (els.soundHelp) els.soundHelp.hidden = true;
 }
 
+function isTextEditingTarget(target) {
+  return Boolean(target?.closest?.("input, textarea, select, [contenteditable='true']"));
+}
+
 function setupAutomaticAudioUnlock() {
   const autoUnlock = (event) => {
     if (event?.target?.closest?.("#soundUnlockButton")) return;
+    if (isTextEditingTarget(event?.target)) return;
     if (!state.audioUnlocked) unlockAudio({ announce: false, immediate: Boolean(event) });
   };
   window.setTimeout(autoUnlock, 500);
