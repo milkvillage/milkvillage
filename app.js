@@ -87,6 +87,13 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function isIsoAfter(leftIso, rightIso) {
+  if (!leftIso || !rightIso) return false;
+  const left = new Date(leftIso).getTime();
+  const right = new Date(rightIso).getTime();
+  return Number.isFinite(left) && Number.isFinite(right) && left > right;
+}
+
 function todayDateKey(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
@@ -449,6 +456,10 @@ async function saveRemoteNow() {
     setRemoteStatus("DB 저장 실패", "error");
     return;
   }
+  if (isIsoAfter(localRevisionAt, localUpdatedAt)) {
+    queueRemoteSave();
+    return;
+  }
   if (remoteRow?.data && remoteRow.updated_at) {
     const remoteIsNewerThanLastSync = !lastRemoteUpdatedAt || new Date(remoteRow.updated_at) > new Date(lastRemoteUpdatedAt);
     const remoteIsNewerThanLocal = new Date(remoteRow.updated_at) > new Date(localUpdatedAt);
@@ -466,6 +477,12 @@ async function saveRemoteNow() {
   if (error) {
     console.error(error);
     setRemoteStatus("DB 저장 실패", "error");
+    return;
+  }
+  if (isIsoAfter(localRevisionAt, localUpdatedAt)) {
+    lastRemoteUpdatedAt = localUpdatedAt;
+    setRemoteStatus("DB 저장 중", "saving");
+    queueRemoteSave();
     return;
   }
   db = dataToSave;
@@ -2180,7 +2197,6 @@ function renderAlarmsAdmin(container) {
     alarm.isActive = false;
     db.alarms.push(alarm);
     state.selectedAlarmId = alarm.id;
-    saveDb();
     state.savedMessage = "내용을 입력한 뒤 저장하면 알림이 작동합니다.";
     renderAdminScreen();
   });
