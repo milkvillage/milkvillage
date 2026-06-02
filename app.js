@@ -935,7 +935,7 @@ function render() {
     <span class="icon" aria-hidden="true">
       <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19 6a9 9 0 0 1 0 12"/></svg>
     </span>
-    ${state.audioUnlocked ? "음성 자동대기 중" : "음성 자동준비 중"}
+    ${state.audioUnlocked ? "음성 신호 전송됨" : "음성 자동준비 중"}
   `;
 
   if (state.screen === "make") renderMakeScreen();
