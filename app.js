@@ -630,6 +630,20 @@ function makeAlarm(id, title, message, time) {
   };
 }
 
+function getAlarmTitleInputValue(alarm) {
+  const title = String(alarm?.title || "").trim();
+  return title === "새 알림" ? "" : title;
+}
+
+function getAlarmMessageInputValue(alarm) {
+  const message = String(alarm?.spokenMessage || alarm?.message || "").trim();
+  return message === "알림 내용을 입력해주세요." ? "" : message;
+}
+
+function getAlarmListTitle(alarm) {
+  return getAlarmTitleInputValue(alarm) || "새 알림";
+}
+
 function makeDefaultOperations(createdAt = nowIso()) {
   const openTasks = [
     "매장 조명과 음악 켜기",
@@ -2086,6 +2100,8 @@ function renderAlarmsAdmin(container) {
   const selectedAlarmId = state.selectedAlarmId || db.alarms[0]?.id || "";
   const alarm = db.alarms.find((item) => item.id === selectedAlarmId) || db.alarms[0] || null;
   state.selectedAlarmId = alarm?.id || null;
+  const alarmTitleValue = getAlarmTitleInputValue(alarm);
+  const alarmMessageValue = getAlarmMessageInputValue(alarm);
   container.innerHTML = `
     <div class="alarm-admin-panel">
       <section class="alarm-list-panel">
@@ -2100,7 +2116,7 @@ function renderAlarmsAdmin(container) {
                   .map(
                     (item) => `
                       <button class="list-button alarm-list-button ${alarm && item.id === alarm.id ? "is-active" : ""}" type="button" data-select-alarm="${item.id}">
-                        <strong>${escapeHtml(item.title)}</strong>
+                        <strong>${escapeHtml(getAlarmListTitle(item))}</strong>
                         <span>${escapeHtml(item.time)}</span>
                       </button>
                     `,
@@ -2121,7 +2137,7 @@ function renderAlarmsAdmin(container) {
             <div class="alarm-form-grid">
               <label class="field">
                 <span>알림 이름</span>
-                <input id="alarmTitleInput" value="${escapeAttr(alarm.title)}" />
+                <input id="alarmTitleInput" value="${escapeAttr(alarmTitleValue)}" placeholder="예: 소모품 확인" />
               </label>
               <label class="field">
                 <span>알림 시간</span>
@@ -2130,7 +2146,7 @@ function renderAlarmsAdmin(container) {
             </div>
             <label class="field alarm-message-field">
               <span>음성으로 읽을 문구</span>
-              <textarea id="alarmSpokenMessageInput">${escapeHtml(alarm.spokenMessage || alarm.message)}</textarea>
+              <textarea id="alarmSpokenMessageInput" placeholder="예: 소모품 확인하고 부족한 품목을 채워주세요.">${escapeHtml(alarmMessageValue)}</textarea>
             </label>
             <div class="alarm-action-row">
               <button class="button button--primary" id="saveAlarm" type="button">저장</button>
@@ -2151,7 +2167,7 @@ function renderAlarmsAdmin(container) {
     });
   });
   container.querySelector("#addAlarm").addEventListener("click", () => {
-    const alarm = makeAlarm(uid("alarm"), "새 알림", "알림 내용을 입력해주세요.", localTimeValue());
+    const alarm = makeAlarm(uid("alarm"), "", "", localTimeValue());
     db.alarms.push(alarm);
     state.selectedAlarmId = alarm.id;
     saveDb();
@@ -2181,8 +2197,8 @@ function renderAlarmsAdmin(container) {
 }
 
 function applySimpleAlarmForm(container, alarm) {
-  const spokenMessage = container.querySelector("#alarmSpokenMessageInput").value.trim() || "확인이 필요한 알림입니다.";
-  alarm.title = container.querySelector("#alarmTitleInput").value.trim() || "알림";
+  const spokenMessage = container.querySelector("#alarmSpokenMessageInput").value.trim();
+  alarm.title = container.querySelector("#alarmTitleInput").value.trim();
   alarm.time = container.querySelector("#alarmTimeInput").value || alarm.time;
   alarm.message = spokenMessage;
   alarm.spokenMessage = spokenMessage;

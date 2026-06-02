@@ -702,6 +702,17 @@ th {
   resize: vertical;
 }
 
+.field input::placeholder,
+.field textarea::placeholder {
+  color: #9aa8ad;
+  opacity: 0.75;
+}
+
+.field input:focus::placeholder,
+.field textarea:focus::placeholder {
+  color: transparent;
+}
+
 .check-field {
   min-height: 46px;
   display: inline-flex;
