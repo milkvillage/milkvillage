@@ -295,6 +295,7 @@ function normalizeRecipe(recipe, index = 0) {
 }
 
 function normalizeAlarm(alarm) {
+  const isDraft = Boolean(alarm.isDraft);
   return {
     ...alarm,
     spokenMessage: alarm.spokenMessage || alarm.message || "",
@@ -302,7 +303,8 @@ function normalizeAlarm(alarm) {
     soundId: "sound_default",
     repeatDays: Array.isArray(alarm.repeatDays) ? alarm.repeatDays : ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
     snoozeMinutes: 10,
-    isActive: true,
+    isDraft,
+    isActive: alarm.isActive !== false && !isDraft,
     requiresAcknowledgement: true,
   };
 }
@@ -642,6 +644,10 @@ function getAlarmMessageInputValue(alarm) {
 
 function getAlarmListTitle(alarm) {
   return getAlarmTitleInputValue(alarm) || "새 알림";
+}
+
+function isScheduledAlarmEnabled(alarm) {
+  return Boolean(alarm?.isActive && !alarm?.isDraft);
 }
 
 function makeDefaultOperations(createdAt = nowIso()) {
@@ -2117,7 +2123,7 @@ function renderAlarmsAdmin(container) {
                     (item) => `
                       <button class="list-button alarm-list-button ${alarm && item.id === alarm.id ? "is-active" : ""}" type="button" data-select-alarm="${item.id}">
                         <strong>${escapeHtml(getAlarmListTitle(item))}</strong>
-                        <span>${escapeHtml(item.time)}</span>
+                        <span>${item.isDraft ? "저장 전" : escapeHtml(item.time)}</span>
                       </button>
                     `,
                   )
@@ -2168,10 +2174,12 @@ function renderAlarmsAdmin(container) {
   });
   container.querySelector("#addAlarm").addEventListener("click", () => {
     const alarm = makeAlarm(uid("alarm"), "", "", localTimeValue());
+    alarm.isDraft = true;
+    alarm.isActive = false;
     db.alarms.push(alarm);
     state.selectedAlarmId = alarm.id;
     saveDb();
-    state.savedMessage = "알림이 추가되었습니다.";
+    state.savedMessage = "내용을 입력한 뒤 저장하면 알림이 작동합니다.";
     renderAdminScreen();
   });
   container.querySelector("#deleteAlarm")?.addEventListener("click", () => {
@@ -2183,12 +2191,14 @@ function renderAlarmsAdmin(container) {
   });
   container.querySelector("#testAlarm")?.addEventListener("click", () => {
     if (!alarm) return;
+    if (!validateAlarmForm(container)) return;
     applySimpleAlarmForm(container, alarm);
     triggerAlarm(alarm, "test");
   });
   container.querySelector("#saveAlarm")?.addEventListener("click", () => {
     if (!alarm) return;
-    applySimpleAlarmForm(container, alarm);
+    if (!validateAlarmForm(container)) return;
+    applySimpleAlarmForm(container, alarm, { activate: true });
     state.savedMessage = "저장 완료";
     saveDb();
     state.selectedAlarmId = alarm.id;
@@ -2196,7 +2206,23 @@ function renderAlarmsAdmin(container) {
   });
 }
 
-function applySimpleAlarmForm(container, alarm) {
+function validateAlarmForm(container) {
+  const titleInput = container.querySelector("#alarmTitleInput");
+  const messageInput = container.querySelector("#alarmSpokenMessageInput");
+  if (!titleInput.value.trim()) {
+    alert("알림 이름을 입력한 뒤 저장해주세요.");
+    titleInput.focus();
+    return false;
+  }
+  if (!messageInput.value.trim()) {
+    alert("음성으로 읽을 문구를 입력한 뒤 저장해주세요.");
+    messageInput.focus();
+    return false;
+  }
+  return true;
+}
+
+function applySimpleAlarmForm(container, alarm, { activate = false } = {}) {
   const spokenMessage = container.querySelector("#alarmSpokenMessageInput").value.trim();
   alarm.title = container.querySelector("#alarmTitleInput").value.trim();
   alarm.time = container.querySelector("#alarmTimeInput").value || alarm.time;
@@ -2205,7 +2231,10 @@ function applySimpleAlarmForm(container, alarm) {
   alarm.soundId = "sound_default";
   alarm.snoozeMinutes = 10;
   alarm.repeatDays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
-  alarm.isActive = true;
+  if (activate) {
+    alarm.isDraft = false;
+    alarm.isActive = true;
+  }
   alarm.requiresAcknowledgement = true;
   alarm.updatedAt = nowIso();
 }
@@ -2484,6 +2513,7 @@ function renderAllLogsAdmin(container) {
 }
 
 function triggerAlarm(alarm, source = "schedule", scheduledAt = "") {
+  if (source === "schedule" && !isScheduledAlarmEnabled(alarm)) return;
   const triggeredAt = scheduledAt || nowIso();
   const existingEvent = findAlarmEventForMinute(alarm.id, new Date(triggeredAt));
   if (existingEvent?.status === "triggered") {
@@ -2614,7 +2644,7 @@ function checkAlarms() {
   let changed = false;
 
   db.alarms
-    .filter((alarm) => alarm.isActive && alarm.repeatDays.includes(day))
+    .filter((alarm) => isScheduledAlarmEnabled(alarm) && alarm.repeatDays.includes(day))
     .forEach((alarm) => {
       const scheduledAt = getScheduledAlarmDate(alarm, now);
       const isDue = scheduledAt <= now && now - scheduledAt < 2 * 60 * 1000;
