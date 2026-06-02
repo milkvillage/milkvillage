@@ -25,6 +25,7 @@ let localRevisionAt = "";
 let pendingSpeech = null;
 let alarmSpeechLoopTimer = null;
 let alarmSpeechRetryTimer = null;
+let speechKeepAliveTimer = null;
 let activeAlarmSoundEventId = "";
 let lastSpeechUnlockAttemptAt = 0;
 let wakeLock = null;
@@ -934,7 +935,7 @@ function render() {
     <span class="icon" aria-hidden="true">
       <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19 6a9 9 0 0 1 0 12"/></svg>
     </span>
-    ${state.audioUnlocked ? "음성 알림 준비됨" : "음성 준비 필요"}
+    ${state.audioUnlocked ? "음성 자동대기 중" : "음성 준비 시작"}
   `;
 
   if (state.screen === "make") renderMakeScreen();
@@ -2670,7 +2671,7 @@ function triggerAlarm(alarm, source = "schedule", scheduledAt = "") {
 function showAlarmModal(alarm) {
   els.alarmTitle.textContent = alarm.title;
   els.alarmMessage.textContent = alarm.message;
-  els.soundHelp.hidden = state.audioUnlocked;
+  if (els.soundHelp) els.soundHelp.hidden = true;
   els.alarmModal.hidden = false;
   startAlarmSound(alarm);
 }
@@ -2796,13 +2797,14 @@ function getScheduledAlarmDate(alarm, date = new Date()) {
 function markSpeechReady() {
   const wasLocked = !state.audioUnlocked;
   state.audioUnlocked = true;
-  els.soundHelp.hidden = true;
+  if (els.soundHelp) els.soundHelp.hidden = true;
+  startSpeechKeepAlive();
   if (wasLocked) render();
 }
 
 function showSpeechTouchHelp() {
-  if (els.alarmModal.hidden) return;
-  els.soundHelp.hidden = false;
+  if (state.audioUnlocked) return;
+  render();
 }
 
 function unlockAudio({ announce = true } = {}) {
@@ -2824,12 +2826,12 @@ function unlockAudio({ announce = true } = {}) {
       volume: queuedSpeech.volume,
     });
   } else if (announce) {
-    speakText("음성 알림이 준비되었습니다.", getVoicePreset(db.settings.defaultSoundId), true, { unlockProbe: true });
+    speakText("매장 태블릿 음성 알림이 준비되었습니다.", getVoicePreset(db.settings.defaultSoundId), true, { unlockProbe: true });
   } else {
-    speakText("음성 준비", getVoicePreset(db.settings.defaultSoundId), true, { unlockProbe: true, volume: 0.55 });
+    speakText("음성 준비", getVoicePreset(db.settings.defaultSoundId), true, { unlockProbe: true, volume: 0.7 });
   }
   render();
-  els.soundHelp.hidden = state.audioUnlocked;
+  if (els.soundHelp) els.soundHelp.hidden = true;
 }
 
 function setupAutomaticAudioUnlock() {
@@ -2862,6 +2864,29 @@ function stopAlarmSound() {
   } catch {
     // Speech synthesis can be unavailable or locked by the browser.
   }
+}
+
+function startSpeechKeepAlive() {
+  window.clearInterval(speechKeepAliveTimer);
+  speechKeepAliveTimer = window.setInterval(() => {
+    if (!state.audioUnlocked || activeAlarmSoundEventId) return;
+    if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) return;
+    if (window.speechSynthesis.speaking || window.speechSynthesis.pending) return;
+    try {
+      const utterance = new window.SpeechSynthesisUtterance(".");
+      const preset = getVoicePreset(db.settings.defaultSoundId);
+      const selectedVoice = selectSpeechVoice(getSpeechVoices(), preset);
+      if (selectedVoice) utterance.voice = selectedVoice;
+      utterance.lang = selectedVoice?.lang || preset?.lang || "ko-KR";
+      utterance.volume = 0;
+      utterance.rate = 1;
+      utterance.pitch = 1;
+      window.speechSynthesis.resume?.();
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      // Keep-alive is best-effort; real alarms keep retrying independently.
+    }
+  }, 4 * 60 * 1000);
 }
 
 function getSpeechVoices() {
@@ -3078,10 +3103,7 @@ els.navButtons.forEach((button) => {
 });
 els.adminShortcut.addEventListener("click", () => setScreen("admin"));
 els.soundUnlockButton.addEventListener("click", () => unlockAudio({ announce: true }));
-els.soundHelpButton.addEventListener("click", () => unlockAudio({ announce: true }));
-els.alarmModal.addEventListener("pointerdown", () => {
-  if (!els.alarmModal.hidden && !state.audioUnlocked) unlockAudio({ announce: false });
-});
+els.soundHelpButton?.addEventListener("click", () => unlockAudio({ announce: true }));
 els.cancelClose.addEventListener("click", closeCancelModal);
 els.cancelConfirm.addEventListener("click", () => {
   cancelPrepBatch(state.pendingCancelBatchId, els.cancelReason.value.trim());
