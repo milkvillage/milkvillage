@@ -2288,6 +2288,7 @@ function renderAlarmsAdmin(container) {
     db.alarms.push(alarm);
     state.selectedAlarmId = alarm.id;
     state.savedMessage = "내용을 입력한 뒤 저장하면 알림이 작동합니다.";
+    saveDb();
     renderAdminScreen();
   });
   container.querySelectorAll("[data-fill-alarm-title]").forEach((button) => {
@@ -2831,7 +2832,6 @@ function unlockAudio({ announce = true, immediate = false } = {}) {
   } else {
     speakText("음성 준비", getVoicePreset(db.settings.defaultSoundId), true, { unlockProbe: true, volume: 0.7, immediate });
   }
-  render();
   if (els.soundHelp) els.soundHelp.hidden = true;
 }
 
@@ -2988,7 +2988,7 @@ function speakText(text, preset, allowWhileLocked = false, { retry = 0, repeat =
     }
   };
   try {
-    if (window.speechSynthesis.pending || (window.speechSynthesis.speaking && repeat)) {
+    if (immediate || window.speechSynthesis.pending || (window.speechSynthesis.speaking && repeat)) {
       window.speechSynthesis.cancel();
     }
     window.speechSynthesis.resume?.();
