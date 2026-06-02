@@ -8,6 +8,7 @@ const LOG_RETENTION_DAYS = {
   alarmEventLogs: 30,
   inventoryTransactions: 90,
   prepBatches: 90,
+  operationRecords: 180,
 };
 const supabaseClient =
   window.supabase && SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY
@@ -26,11 +27,12 @@ let pendingSpeech = null;
 const state = {
   screen: "make",
   adminUnlocked: false,
-  adminMenu: "recipes",
+  adminMenu: "summary",
   selectedRecipeId: null,
   selectedVariantId: null,
   selectedAnalysisSupplyId: null,
   analysisMode: "weekday",
+  operatorName: "",
   loadingVariantId: null,
   pendingCancelBatchId: null,
   activeAlarmEventId: null,
@@ -79,7 +81,14 @@ function nowIso() {
 }
 
 function todayDateKey(date = new Date()) {
-  return date.toISOString().slice(0, 10);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function dateKeyFromIso(iso) {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (!Number.isFinite(date.getTime())) return "";
+  return todayDateKey(date);
 }
 
 function timeText(iso) {
@@ -130,6 +139,8 @@ function pruneExpiredLogs(referenceDate = new Date()) {
     alarmEventLogs: db.alarmEventLogs.length,
     inventoryTransactions: db.inventoryTransactions.length,
     prepBatches: db.prepBatches.length,
+    checklistRecords: db.operations?.checklistRecords?.length || 0,
+    handoverNotes: db.operations?.handoverNotes?.length || 0,
   };
 
   db.alarmEventLogs = db.alarmEventLogs.filter((log) =>
@@ -141,11 +152,21 @@ function pruneExpiredLogs(referenceDate = new Date()) {
   db.prepBatches = db.prepBatches.filter((batch) =>
     isWithinRetention(batch.createdAt || batch.updatedAt, LOG_RETENTION_DAYS.prepBatches, referenceDate),
   );
+  if (db.operations) {
+    db.operations.checklistRecords = db.operations.checklistRecords.filter((record) =>
+      isWithinRetention(record.updatedAt || record.checkedAt, LOG_RETENTION_DAYS.operationRecords, referenceDate),
+    );
+    db.operations.handoverNotes = db.operations.handoverNotes.filter((note) =>
+      note.status === "open" || isWithinRetention(note.createdAt || note.updatedAt, LOG_RETENTION_DAYS.operationRecords, referenceDate),
+    );
+  }
 
   return (
     beforeCounts.alarmEventLogs !== db.alarmEventLogs.length ||
     beforeCounts.inventoryTransactions !== db.inventoryTransactions.length ||
-    beforeCounts.prepBatches !== db.prepBatches.length
+    beforeCounts.prepBatches !== db.prepBatches.length ||
+    beforeCounts.checklistRecords !== (db.operations?.checklistRecords?.length || 0) ||
+    beforeCounts.handoverNotes !== (db.operations?.handoverNotes?.length || 0)
   );
 }
 
@@ -179,6 +200,61 @@ function normalizeDb(nextDb) {
     alarms: Array.isArray(nextDb?.alarms) ? nextDb.alarms.map(normalizeAlarm) : fallback.alarms,
     alarmSounds: Array.isArray(nextDb?.alarmSounds) ? nextDb.alarmSounds.map(normalizeVoicePreset) : fallback.alarmSounds,
     alarmEventLogs: Array.isArray(nextDb?.alarmEventLogs) ? nextDb.alarmEventLogs : fallback.alarmEventLogs,
+    operations: normalizeOperations(nextDb?.operations, fallback.operations),
+  };
+}
+
+function normalizeOperations(operations, fallbackOperations) {
+  const fallback = fallbackOperations || makeDefaultOperations();
+  return {
+    checklistTasks: Array.isArray(operations?.checklistTasks)
+      ? operations.checklistTasks.map(normalizeChecklistTask)
+      : fallback.checklistTasks,
+    checklistRecords: Array.isArray(operations?.checklistRecords)
+      ? operations.checklistRecords.map(normalizeChecklistRecord)
+      : fallback.checklistRecords,
+    handoverNotes: Array.isArray(operations?.handoverNotes)
+      ? operations.handoverNotes.map(normalizeHandoverNote)
+      : fallback.handoverNotes,
+  };
+}
+
+function normalizeChecklistTask(task, index = 0) {
+  return {
+    id: task?.id || uid("check_task"),
+    section: task?.section === "close" ? "close" : "open",
+    title: task?.title || "체크 항목",
+    isActive: task?.isActive !== false,
+    sortOrder: Number.isFinite(Number(task?.sortOrder)) ? Number(task.sortOrder) : index + 1,
+    createdAt: task?.createdAt || nowIso(),
+    updatedAt: task?.updatedAt || task?.createdAt || nowIso(),
+  };
+}
+
+function normalizeChecklistRecord(record) {
+  return {
+    id: record?.id || uid("check_record"),
+    date: record?.date || todayDateKey(),
+    taskId: record?.taskId || "",
+    checked: Boolean(record?.checked),
+    checkedAt: record?.checkedAt || "",
+    checkedBy: record?.checkedBy || "",
+    updatedAt: record?.updatedAt || record?.checkedAt || nowIso(),
+  };
+}
+
+function normalizeHandoverNote(note) {
+  return {
+    id: note?.id || uid("handover"),
+    date: note?.date || dateKeyFromIso(note?.createdAt || nowIso()),
+    category: note?.category || "인수인계",
+    message: note?.message || "",
+    author: note?.author || "직원",
+    status: note?.status === "resolved" ? "resolved" : "open",
+    resolvedAt: note?.resolvedAt || "",
+    resolvedBy: note?.resolvedBy || "",
+    createdAt: note?.createdAt || nowIso(),
+    updatedAt: note?.updatedAt || note?.createdAt || nowIso(),
   };
 }
 
@@ -496,6 +572,7 @@ function seedDb() {
       },
     ],
     alarmEventLogs: [],
+    operations: makeDefaultOperations(createdAt),
   };
 }
 
@@ -548,6 +625,48 @@ function makeAlarm(id, title, message, time) {
   };
 }
 
+function makeDefaultOperations(createdAt = nowIso()) {
+  const openTasks = [
+    "매장 조명과 음악 켜기",
+    "POS/결제기 정상 작동 확인",
+    "냉장고/냉동고 온도 확인",
+    "제빙기와 얼음 상태 확인",
+    "오늘 필요한 재료 제조량 확인",
+    "영업 공간 청결 상태 확인",
+  ];
+  const closeTasks = [
+    "제조 도구 세척 및 건조",
+    "재료 보관 상태 확인",
+    "쓰레기 정리",
+    "바닥/작업대 마감 청소",
+    "내일 필요한 발주 품목 확인",
+    "POS 마감 및 전원 확인",
+  ];
+
+  const checklistTasks = [
+    ...openTasks.map((title, index) => makeChecklistTask(`open_${index + 1}`, "open", title, index + 1, createdAt)),
+    ...closeTasks.map((title, index) => makeChecklistTask(`close_${index + 1}`, "close", title, index + 1, createdAt)),
+  ];
+
+  return {
+    checklistTasks,
+    checklistRecords: [],
+    handoverNotes: [],
+  };
+}
+
+function makeChecklistTask(id, section, title, sortOrder, createdAt = nowIso()) {
+  return {
+    id,
+    section,
+    title,
+    sortOrder,
+    isActive: true,
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
 function recipeSortValue(recipe, index = 0) {
   const sortOrder = Number(recipe?.sortOrder);
   return Number.isFinite(sortOrder) ? sortOrder : index + 1;
@@ -590,7 +709,7 @@ function getIngredientsForVariant(variantId) {
 function getTodayPrepBatches(includeCanceled = true) {
   const today = todayDateKey();
   return db.prepBatches
-    .filter((batch) => batch.createdAt.slice(0, 10) === today)
+    .filter((batch) => dateKeyFromIso(batch.createdAt) === today)
     .filter((batch) => includeCanceled || batch.status === "active")
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
@@ -607,6 +726,64 @@ function getLatestTransactionForSupply(supplyId) {
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
 }
 
+function getChecklistTasks(section) {
+  return (db.operations?.checklistTasks || [])
+    .filter((task) => task.section === section && task.isActive)
+    .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || a.title.localeCompare(b.title, "ko"));
+}
+
+function getChecklistRecord(date, taskId) {
+  return (db.operations?.checklistRecords || []).find((record) => record.date === date && record.taskId === taskId);
+}
+
+function isChecklistTaskChecked(date, taskId) {
+  return Boolean(getChecklistRecord(date, taskId)?.checked);
+}
+
+function getChecklistStats(date = todayDateKey()) {
+  const sections = ["open", "close"];
+  const sectionStats = sections.map((section) => {
+    const tasks = getChecklistTasks(section);
+    const done = tasks.filter((task) => isChecklistTaskChecked(date, task.id)).length;
+    return {
+      section,
+      label: section === "open" ? "오픈" : "마감",
+      total: tasks.length,
+      done,
+      pending: Math.max(0, tasks.length - done),
+      tasks,
+    };
+  });
+  const total = sectionStats.reduce((sum, item) => sum + item.total, 0);
+  const done = sectionStats.reduce((sum, item) => sum + item.done, 0);
+  return {
+    date,
+    sections: sectionStats,
+    total,
+    done,
+    pending: Math.max(0, total - done),
+    percent: total ? Math.round((done / total) * 100) : 0,
+  };
+}
+
+function getHandoverNotes({ openOnly = false, todayOnly = false } = {}) {
+  const today = todayDateKey();
+  return (db.operations?.handoverNotes || [])
+    .filter((note) => !openOnly || note.status === "open")
+    .filter((note) => !todayOnly || note.date === today)
+    .sort((a, b) => {
+      if (a.status !== b.status) return a.status === "open" ? -1 : 1;
+      return new Date(b.createdAt) - new Date(a.createdAt);
+    });
+}
+
+function getOpenAlarmEventsToday() {
+  const today = todayDateKey();
+  return db.alarmEventLogs
+    .filter((log) => ["triggered", "snoozed"].includes(log.status) && dateKeyFromIso(log.triggeredAt) === today)
+    .sort((a, b) => new Date(b.triggeredAt) - new Date(a.triggeredAt));
+}
+
 function setScreen(screen) {
   state.screen = screen;
   state.savedMessage = "";
@@ -621,6 +798,7 @@ function render() {
   const titleMap = {
     make: "재료 만들기",
     orders: "발주",
+    ops: "운영 체크",
     admin: "관리자",
   };
   els.screenTitle.textContent = titleMap[state.screen];
@@ -635,6 +813,7 @@ function render() {
 
   if (state.screen === "make") renderMakeScreen();
   if (state.screen === "orders") renderOrderScreen();
+  if (state.screen === "ops") renderOpsScreen();
   if (state.screen === "admin") renderAdminScreen();
 }
 
@@ -912,6 +1091,197 @@ function renderOrderScreen() {
   `;
 }
 
+function renderOpsScreen() {
+  const today = todayDateKey();
+  const stats = getChecklistStats(today);
+  const openNotes = getHandoverNotes({ openOnly: true });
+  const recentNotes = getHandoverNotes().slice(0, 8);
+
+  els.workArea.innerHTML = `
+    <section class="ops-screen" aria-label="운영 체크">
+      <div class="panel-header">
+        <h2>오늘 운영 체크</h2>
+        <p>오픈/마감 루틴과 특이사항을 같은 화면에서 남깁니다.</p>
+      </div>
+      <div class="ops-body">
+        <section class="ops-card ops-card--summary">
+          <div>
+            <span class="summary-label">오늘 체크 진행률</span>
+            <strong class="summary-value">${stats.percent}%</strong>
+          </div>
+          <div class="progress-track" aria-label="오늘 체크 진행률">
+            <span style="width: ${stats.percent}%"></span>
+          </div>
+          <div class="summary-meta">
+            <span>${stats.done}/${stats.total} 완료</span>
+            <span>미완료 ${stats.pending}</span>
+            <span>인수인계 ${openNotes.length}</span>
+          </div>
+          <label class="field operator-field">
+            <span>근무자 이름</span>
+            <input id="operatorName" type="text" value="${escapeAttr(state.operatorName)}" placeholder="이름 입력" />
+          </label>
+        </section>
+
+        ${stats.sections.map((sectionStat) => renderChecklistSection(sectionStat, today)).join("")}
+
+        <section class="ops-card ops-card--wide">
+          <div class="ops-card-heading">
+            <h3>특이사항 / 인수인계</h3>
+            <span>${openNotes.length}건 진행 중</span>
+          </div>
+          <div class="handover-form">
+            <label class="field">
+              <span>분류</span>
+              <select id="handoverCategory">
+                <option value="인수인계">인수인계</option>
+                <option value="재고">재고</option>
+                <option value="기계/설비">기계/설비</option>
+                <option value="고객">고객</option>
+                <option value="청소/위생">청소/위생</option>
+              </select>
+            </label>
+            <label class="field handover-message-field">
+              <span>내용</span>
+              <textarea id="handoverMessage" placeholder="다음 근무자나 점장이 알아야 할 내용을 입력"></textarea>
+            </label>
+            <button class="button button--primary" id="addHandoverNote" type="button">기록 추가</button>
+          </div>
+          ${
+            recentNotes.length
+              ? `<div class="handover-list">
+                  ${recentNotes
+                    .map(
+                      (note) => `
+                        <article class="handover-item ${note.status === "resolved" ? "is-resolved" : ""}">
+                          <div>
+                            <strong>${escapeHtml(note.category)}</strong>
+                            <p>${escapeHtml(note.message)}</p>
+                            <span>${dateTimeText(note.createdAt)} · ${escapeHtml(note.author)}</span>
+                          </div>
+                          ${
+                            note.status === "open"
+                              ? `<button class="button button--ghost button--small" data-resolve-note="${note.id}" type="button">완료</button>`
+                              : `<span class="badge badge--ok">완료</span>`
+                          }
+                        </article>
+                      `,
+                    )
+                    .join("")}
+                </div>`
+              : `<div class="empty-state">아직 남겨진 인수인계가 없습니다.</div>`
+          }
+        </section>
+      </div>
+    </section>
+  `;
+
+  const operatorInput = els.workArea.querySelector("#operatorName");
+  operatorInput.addEventListener("input", () => {
+    state.operatorName = operatorInput.value;
+  });
+  els.workArea.querySelectorAll("[data-check-task]").forEach((input) => {
+    input.addEventListener("change", () => {
+      updateChecklistRecord(input.dataset.checkTask, input.checked, operatorInput.value.trim() || "직원");
+    });
+  });
+  els.workArea.querySelector("#addHandoverNote").addEventListener("click", () => {
+    addHandoverNote(els.workArea, operatorInput.value.trim() || "직원");
+  });
+  els.workArea.querySelectorAll("[data-resolve-note]").forEach((button) => {
+    button.addEventListener("click", () => resolveHandoverNote(button.dataset.resolveNote, operatorInput.value.trim() || "직원"));
+  });
+}
+
+function renderChecklistSection(sectionStat, date) {
+  return `
+    <section class="ops-card">
+      <div class="ops-card-heading">
+        <h3>${sectionStat.label} 체크</h3>
+        <span>${sectionStat.done}/${sectionStat.total}</span>
+      </div>
+      <div class="checklist-list">
+        ${
+          sectionStat.tasks.length
+            ? sectionStat.tasks
+                .map((task) => {
+                  const record = getChecklistRecord(date, task.id);
+                  return `
+                    <label class="checklist-item ${record?.checked ? "is-checked" : ""}">
+                      <input type="checkbox" data-check-task="${task.id}" ${record?.checked ? "checked" : ""} />
+                      <span>${escapeHtml(task.title)}</span>
+                      <small>${record?.checkedAt ? `${timeText(record.checkedAt)} · ${escapeHtml(record.checkedBy || "직원")}` : "미완료"}</small>
+                    </label>
+                  `;
+                })
+                .join("")
+            : `<div class="empty-state">체크 항목이 없습니다.</div>`
+        }
+      </div>
+    </section>
+  `;
+}
+
+function updateChecklistRecord(taskId, checked, checkedBy) {
+  const date = todayDateKey();
+  const updatedAt = nowIso();
+  let record = getChecklistRecord(date, taskId);
+  if (!record) {
+    record = {
+      id: uid("check_record"),
+      date,
+      taskId,
+      checked: false,
+      checkedAt: "",
+      checkedBy: "",
+      updatedAt,
+    };
+    db.operations.checklistRecords.push(record);
+  }
+  record.checked = checked;
+  record.checkedAt = checked ? updatedAt : "";
+  record.checkedBy = checked ? checkedBy : "";
+  record.updatedAt = updatedAt;
+  saveDb();
+  renderOpsScreen();
+}
+
+function addHandoverNote(container, author) {
+  const messageInput = container.querySelector("#handoverMessage");
+  const message = messageInput.value.trim();
+  if (!message) {
+    messageInput.focus();
+    return;
+  }
+  const createdAt = nowIso();
+  db.operations.handoverNotes.push({
+    id: uid("handover"),
+    date: todayDateKey(),
+    category: container.querySelector("#handoverCategory").value,
+    message,
+    author,
+    status: "open",
+    resolvedAt: "",
+    resolvedBy: "",
+    createdAt,
+    updatedAt: createdAt,
+  });
+  saveDb();
+  renderOpsScreen();
+}
+
+function resolveHandoverNote(noteId, resolvedBy) {
+  const note = db.operations.handoverNotes.find((item) => item.id === noteId);
+  if (!note) return;
+  const resolvedAt = nowIso();
+  note.status = "resolved";
+  note.resolvedAt = resolvedAt;
+  note.resolvedBy = resolvedBy;
+  note.updatedAt = resolvedAt;
+  saveDb();
+  renderOpsScreen();
+}
+
 function renderAdminScreen() {
   if (!state.adminUnlocked) {
     renderAdminPin();
@@ -919,6 +1289,7 @@ function renderAdminScreen() {
   }
 
   const menuLabels = [
+    ["summary", "오늘 요약"],
     ["recipes", "레시피 관리"],
     ["supplies", "소모품/발주량 관리"],
     ["adjust", "입고/재고 조정"],
@@ -961,6 +1332,7 @@ function renderAdminScreen() {
   });
 
   const body = els.workArea.querySelector("#adminBody");
+  if (state.adminMenu === "summary") renderManagerSummaryAdmin(body);
   if (state.adminMenu === "recipes") renderRecipeAdmin(body);
   if (state.adminMenu === "supplies") renderSuppliesAdmin(body);
   if (state.adminMenu === "adjust") renderAdjustAdmin(body);
@@ -1001,6 +1373,129 @@ function renderAdminPin() {
     if (event.key === "Enter") unlock();
   });
   input.focus();
+}
+
+function renderManagerSummaryAdmin(container) {
+  const today = todayDateKey();
+  const checklistStats = getChecklistStats(today);
+  const openNotes = getHandoverNotes({ openOnly: true });
+  const recentNotes = getHandoverNotes().slice(0, 5);
+  const lowSupplies = getOrderNeededSupplies();
+  const openAlarms = getOpenAlarmEventsToday();
+  const todayBatches = getTodayPrepBatches(false);
+  const pendingTasks = checklistStats.sections.flatMap((section) =>
+    section.tasks
+      .filter((task) => !isChecklistTaskChecked(today, task.id))
+      .map((task) => ({ ...task, sectionLabel: section.label })),
+  );
+
+  container.innerHTML = `
+    <div class="admin-card">
+      <div class="manager-summary-grid">
+        <article class="summary-tile">
+          <span>체크 진행률</span>
+          <strong>${checklistStats.percent}%</strong>
+          <small>${checklistStats.done}/${checklistStats.total} 완료</small>
+        </article>
+        <article class="summary-tile ${lowSupplies.length ? "is-warning" : ""}">
+          <span>발주 필요</span>
+          <strong>${lowSupplies.length}</strong>
+          <small>${lowSupplies.length ? lowSupplies.slice(0, 2).map((supply) => supply.name).join(", ") : "없음"}</small>
+        </article>
+        <article class="summary-tile ${openNotes.length ? "is-warning" : ""}">
+          <span>미해결 인수인계</span>
+          <strong>${openNotes.length}</strong>
+          <small>${openNotes.length ? "확인 필요" : "없음"}</small>
+        </article>
+        <article class="summary-tile ${openAlarms.length ? "is-warning" : ""}">
+          <span>미처리 알림</span>
+          <strong>${openAlarms.length}</strong>
+          <small>${openAlarms.length ? openAlarms[0].alarmTitle : "없음"}</small>
+        </article>
+        <article class="summary-tile">
+          <span>오늘 제조</span>
+          <strong>${todayBatches.length}</strong>
+          <small>취소 제외</small>
+        </article>
+      </div>
+    </div>
+
+    <div class="summary-columns">
+      <section class="admin-card">
+        <h3>미완료 체크</h3>
+        ${
+          pendingTasks.length
+            ? `<ul class="compact-list">
+                ${pendingTasks
+                  .map((task) => `<li><strong>${task.sectionLabel}</strong><span>${escapeHtml(task.title)}</span></li>`)
+                  .join("")}
+              </ul>`
+            : `<div class="empty-state">오늘 체크가 모두 완료되었습니다.</div>`
+        }
+      </section>
+
+      <section class="admin-card">
+        <h3>최근 인수인계</h3>
+        ${
+          recentNotes.length
+            ? `<div class="handover-list handover-list--compact">
+                ${recentNotes
+                  .map(
+                    (note) => `
+                      <article class="handover-item ${note.status === "resolved" ? "is-resolved" : ""}">
+                        <div>
+                          <strong>${escapeHtml(note.category)}</strong>
+                          <p>${escapeHtml(note.message)}</p>
+                          <span>${dateTimeText(note.createdAt)} · ${escapeHtml(note.author)}${
+                            note.status === "resolved" ? ` · 완료 ${note.resolvedAt ? dateTimeText(note.resolvedAt) : ""}` : ""
+                          }</span>
+                        </div>
+                      </article>
+                    `,
+                  )
+                  .join("")}
+              </div>`
+            : `<div class="empty-state">최근 인수인계가 없습니다.</div>`
+        }
+      </section>
+    </div>
+
+    <div class="summary-columns">
+      <section class="admin-card">
+        <h3>발주 필요 품목</h3>
+        ${
+          lowSupplies.length
+            ? `<ul class="compact-list">
+                ${lowSupplies
+                  .map(
+                    (supply) => `
+                      <li>
+                        <strong>${escapeHtml(supply.name)}</strong>
+                        <span>${numberText(supply.currentStock)}${escapeHtml(supply.unit)} / 기준 ${numberText(supply.minStock)}${escapeHtml(supply.unit)}</span>
+                      </li>
+                    `,
+                  )
+                  .join("")}
+              </ul>`
+            : `<div class="empty-state">현재 발주가 필요한 품목이 없습니다.</div>`
+        }
+      </section>
+
+      <section class="admin-card">
+        <h3>오늘 제조 로그</h3>
+        ${
+          todayBatches.length
+            ? `<ul class="compact-list">
+                ${todayBatches
+                  .slice(0, 8)
+                  .map((batch) => `<li><strong>${timeText(batch.createdAt)}</strong><span>${escapeHtml(batch.recipeName)} ${escapeHtml(batch.variantLabel)}</span></li>`)
+                  .join("")}
+              </ul>`
+            : `<div class="empty-state">오늘 제조 로그가 없습니다.</div>`
+        }
+      </section>
+    </div>
+  `;
 }
 
 function renderRecipeAdmin(container) {
@@ -2012,14 +2507,22 @@ function closeAlarmModal() {
 function getOpenAlarmEvent() {
   const today = todayDateKey();
   return db.alarmEventLogs
-    .filter((log) => log.status === "triggered" && log.triggeredAt?.slice(0, 10) === today)
+    .filter((log) => log.status === "triggered" && dateKeyFromIso(log.triggeredAt) === today)
     .sort((a, b) => new Date(b.triggeredAt) - new Date(a.triggeredAt))[0];
 }
 
 function findAlarmEventForMinute(alarmId, date) {
   const dateKey = todayDateKey(date);
-  const minuteKey = date.toISOString().slice(11, 16);
-  return db.alarmEventLogs.find((log) => log.alarmId === alarmId && log.triggeredAt?.slice(0, 10) === dateKey && log.triggeredAt?.slice(11, 16) === minuteKey);
+  const minuteKey = localTimeValue(date);
+  return db.alarmEventLogs.find((log) => {
+    const triggeredAt = log.triggeredAt ? new Date(log.triggeredAt) : null;
+    return (
+      log.alarmId === alarmId &&
+      dateKeyFromIso(log.triggeredAt) === dateKey &&
+      triggeredAt &&
+      localTimeValue(triggeredAt) === minuteKey
+    );
+  });
 }
 
 function getAlarmDisplayFromEvent(eventLog) {
