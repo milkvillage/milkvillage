@@ -26,6 +26,7 @@ let pendingSpeech = null;
 let alarmSpeechLoopTimer = null;
 let alarmSpeechRetryTimer = null;
 let activeAlarmSoundEventId = "";
+let lastSpeechUnlockAttemptAt = 0;
 let wakeLock = null;
 let speechVoicesPrepared = false;
 
@@ -933,7 +934,7 @@ function render() {
     <span class="icon" aria-hidden="true">
       <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19 6a9 9 0 0 1 0 12"/></svg>
     </span>
-    ${state.audioUnlocked ? "음성 알림 준비됨" : "음성 알림 대기 중"}
+    ${state.audioUnlocked ? "음성 알림 준비됨" : "음성 준비 필요"}
   `;
 
   if (state.screen === "make") renderMakeScreen();
@@ -2669,7 +2670,7 @@ function triggerAlarm(alarm, source = "schedule", scheduledAt = "") {
 function showAlarmModal(alarm) {
   els.alarmTitle.textContent = alarm.title;
   els.alarmMessage.textContent = alarm.message;
-  els.soundHelp.hidden = true;
+  els.soundHelp.hidden = state.audioUnlocked;
   els.alarmModal.hidden = false;
   startAlarmSound(alarm);
 }
@@ -2792,24 +2793,43 @@ function getScheduledAlarmDate(alarm, date = new Date()) {
   return scheduledAt;
 }
 
-function unlockAudio({ announce = true } = {}) {
+function markSpeechReady() {
+  const wasLocked = !state.audioUnlocked;
   state.audioUnlocked = true;
+  els.soundHelp.hidden = true;
+  if (wasLocked) render();
+}
+
+function showSpeechTouchHelp() {
+  if (els.alarmModal.hidden) return;
+  els.soundHelp.hidden = false;
+}
+
+function unlockAudio({ announce = true } = {}) {
   prepareSpeechVoices();
   requestWakeLock();
+  const activeEvent = db.alarmEventLogs.find((log) => log.id === state.activeAlarmEventId);
+  const now = Date.now();
+  if (!announce && now - lastSpeechUnlockAttemptAt < 1200) return;
+  lastSpeechUnlockAttemptAt = now;
   const queuedSpeech = pendingSpeech;
   pendingSpeech = null;
-  const activeEvent = db.alarmEventLogs.find((log) => log.id === state.activeAlarmEventId);
   if (activeEvent?.status === "triggered") {
     startAlarmSound(getAlarmDisplayFromEvent(activeEvent), { forceRestart: true });
   } else if (queuedSpeech) {
-    speakText(queuedSpeech.text, queuedSpeech.preset, true, { repeat: queuedSpeech.repeat, eventId: queuedSpeech.eventId });
+    speakText(queuedSpeech.text, queuedSpeech.preset, true, {
+      repeat: queuedSpeech.repeat,
+      eventId: queuedSpeech.eventId,
+      unlockProbe: queuedSpeech.unlockProbe,
+      volume: queuedSpeech.volume,
+    });
   } else if (announce) {
-    speakText("음성 알림이 준비되었습니다.", getVoicePreset(db.settings.defaultSoundId), true);
+    speakText("음성 알림이 준비되었습니다.", getVoicePreset(db.settings.defaultSoundId), true, { unlockProbe: true });
   } else {
-    primeSpeechSynthesis();
+    speakText("음성 준비", getVoicePreset(db.settings.defaultSoundId), true, { unlockProbe: true, volume: 0.55 });
   }
   render();
-  els.soundHelp.hidden = true;
+  els.soundHelp.hidden = state.audioUnlocked;
 }
 
 function setupAutomaticAudioUnlock() {
@@ -2817,7 +2837,7 @@ function setupAutomaticAudioUnlock() {
     if (!state.audioUnlocked) unlockAudio({ announce: false });
   };
   ["pointerdown", "touchstart", "keydown"].forEach((eventName) => {
-    document.addEventListener(eventName, autoUnlock, { once: true, capture: true });
+    document.addEventListener(eventName, autoUnlock, { capture: true });
   });
 }
 
@@ -2826,7 +2846,6 @@ function startAlarmSound(alarm, { forceRestart = false } = {}) {
   if (!forceRestart && activeAlarmSoundEventId === soundEventId) return;
   stopAlarmSound();
   activeAlarmSoundEventId = soundEventId;
-  state.audioUnlocked = true;
   requestWakeLock();
   speakAlarm(alarm, true, { repeat: true, eventId: soundEventId });
 }
@@ -2866,17 +2885,16 @@ function speakAlarm(alarm, allowWhileLocked = false, options = {}) {
   speakText(alarm.spokenMessage || alarm.message || alarm.title, preset, allowWhileLocked, options);
 }
 
-function speakText(text, preset, allowWhileLocked = false, { retry = 0, repeat = false, eventId = "" } = {}) {
+function speakText(text, preset, allowWhileLocked = false, { retry = 0, repeat = false, eventId = "", unlockProbe = false, volume = null } = {}) {
   const phrase = String(text || "").trim();
   if (!phrase) return false;
-  if (allowWhileLocked) state.audioUnlocked = true;
-  if (!state.audioUnlocked) {
-    pendingSpeech = { text: phrase, preset, repeat, eventId };
+  if (!state.audioUnlocked && !allowWhileLocked) {
+    pendingSpeech = { text: phrase, preset, repeat, eventId, unlockProbe, volume };
     return false;
   }
-  els.soundHelp.hidden = true;
   if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) {
     scheduleSpeechRetry(phrase, preset, 1000, retry + 1, { repeat, eventId });
+    if (repeat) showSpeechTouchHelp();
     return false;
   }
   const voices = getSpeechVoices();
@@ -2890,25 +2908,26 @@ function speakText(text, preset, allowWhileLocked = false, { retry = 0, repeat =
     if (!repeat || !isCurrentAlarmSpeech()) return;
     window.clearTimeout(alarmSpeechLoopTimer);
     alarmSpeechLoopTimer = window.setTimeout(() => {
-      speakText(phrase, preset, true, { repeat: true, eventId: speechEventId });
+      speakText(phrase, preset, true, { repeat: true, eventId: speechEventId, volume });
     }, delay);
   };
   if (selectedVoice) utterance.voice = selectedVoice;
   utterance.lang = selectedVoice?.lang || preset?.lang || "ko-KR";
   utterance.rate = Number(preset?.rate || 0.92);
   utterance.pitch = Number(preset?.pitch || 1);
-  utterance.volume = Number(preset?.volume || 1);
+  utterance.volume = volume === null ? Number(preset?.volume || 1) : Number(volume);
   utterance.onstart = () => {
     started = true;
-    els.soundHelp.hidden = true;
+    markSpeechReady();
   };
   utterance.onend = () => {
     finished = true;
-    scheduleNextSpeech(900);
+    if (!unlockProbe) scheduleNextSpeech(900);
   };
   utterance.onerror = () => {
     finished = true;
-    scheduleSpeechRetry(phrase, preset, 500, retry + 1, { repeat, eventId: speechEventId });
+    if (repeat) showSpeechTouchHelp();
+    scheduleSpeechRetry(phrase, preset, 500, retry + 1, { repeat, eventId: speechEventId, unlockProbe, volume });
   };
   try {
     window.speechSynthesis.cancel();
@@ -2925,19 +2944,25 @@ function speakText(text, preset, allowWhileLocked = false, { retry = 0, repeat =
             } catch {
               // Keep retrying speech below.
             }
-            scheduleSpeechRetry(phrase, preset, 500, retry + 1, { repeat, eventId: speechEventId });
+            if (repeat) showSpeechTouchHelp();
+            scheduleSpeechRetry(phrase, preset, 500, retry + 1, { repeat, eventId: speechEventId, unlockProbe, volume });
           }
         }, estimateSpeechWatchdogDelay(phrase));
         window.setTimeout(() => {
-          if (!started && !finished && isCurrentAlarmSpeech()) window.speechSynthesis.resume?.();
+          if (!started && !finished && isCurrentAlarmSpeech()) {
+            if (repeat) showSpeechTouchHelp();
+            window.speechSynthesis.resume?.();
+          }
         }, 1200);
       } catch {
-        scheduleSpeechRetry(phrase, preset, 500, retry + 1, { repeat, eventId: speechEventId });
+        if (repeat) showSpeechTouchHelp();
+        scheduleSpeechRetry(phrase, preset, 500, retry + 1, { repeat, eventId: speechEventId, unlockProbe, volume });
       }
     }, voices.length ? 80 : 350);
     return true;
   } catch {
-    scheduleSpeechRetry(phrase, preset, 500, retry + 1, { repeat, eventId: speechEventId });
+    if (repeat) showSpeechTouchHelp();
+    scheduleSpeechRetry(phrase, preset, 500, retry + 1, { repeat, eventId: speechEventId, unlockProbe, volume });
     return false;
   }
 }
@@ -2955,13 +2980,13 @@ function selectSpeechVoice(voices, preset) {
   );
 }
 
-function scheduleSpeechRetry(text, preset, delay, retry, { repeat = false, eventId = "" } = {}) {
+function scheduleSpeechRetry(text, preset, delay, retry, { repeat = false, eventId = "", unlockProbe = false, volume = null } = {}) {
   const speechEventId = eventId || activeAlarmSoundEventId;
   if (repeat && speechEventId && speechEventId !== activeAlarmSoundEventId) return;
   window.clearTimeout(alarmSpeechRetryTimer);
   alarmSpeechRetryTimer = window.setTimeout(() => {
     if (repeat && speechEventId && speechEventId !== activeAlarmSoundEventId) return;
-    speakText(text, preset, true, { retry, repeat, eventId: speechEventId });
+    speakText(text, preset, true, { retry, repeat, eventId: speechEventId, unlockProbe, volume });
   }, delay);
 }
 
@@ -3054,6 +3079,9 @@ els.navButtons.forEach((button) => {
 els.adminShortcut.addEventListener("click", () => setScreen("admin"));
 els.soundUnlockButton.addEventListener("click", () => unlockAudio({ announce: true }));
 els.soundHelpButton.addEventListener("click", () => unlockAudio({ announce: true }));
+els.alarmModal.addEventListener("pointerdown", () => {
+  if (!els.alarmModal.hidden && !state.audioUnlocked) unlockAudio({ announce: false });
+});
 els.cancelClose.addEventListener("click", closeCancelModal);
 els.cancelConfirm.addEventListener("click", () => {
   cancelPrepBatch(state.pendingCancelBatchId, els.cancelReason.value.trim());
