@@ -4,6 +4,16 @@ const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_KLXkL3WkYQXTTUsdE9WZJw_Vw63SWtM
 const REMOTE_TABLE = "milk_village_state";
 const REMOTE_STATE_ID = "main";
 const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const alarmDayOrder = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+const alarmDayLabels = {
+  mon: "월",
+  tue: "화",
+  wed: "수",
+  thu: "목",
+  fri: "금",
+  sat: "토",
+  sun: "일",
+};
 const LOG_RETENTION_DAYS = {
   alarmEventLogs: 30,
   inventoryTransactions: 90,
@@ -351,13 +361,28 @@ function normalizeAlarm(alarm) {
     ...alarm,
     spokenMessage: alarm.spokenMessage || alarm.message || "",
     message: alarm.spokenMessage || alarm.message || "",
+    time: normalizeAlarmTime(alarm.time),
     soundId: "sound_default",
-    repeatDays: Array.isArray(alarm.repeatDays) ? alarm.repeatDays : ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+    repeatDays: normalizeAlarmDays(alarm.repeatDays),
     snoozeMinutes: 10,
     isDraft,
     isActive: alarm.isActive !== false && !isDraft,
     requiresAcknowledgement: true,
   };
+}
+
+function normalizeAlarmTime(value) {
+  const match = String(value || "").match(/^(\d{1,2}):(\d{1,2})$/);
+  if (!match) return localTimeValue();
+  const hour = Math.min(23, Math.max(0, Number(match[1])));
+  const minute = Math.min(59, Math.max(0, Number(match[2])));
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function normalizeAlarmDays(days) {
+  if (!Array.isArray(days)) return [...alarmDayOrder];
+  const uniqueDays = alarmDayOrder.filter((day) => days.includes(day));
+  return uniqueDays.length ? uniqueDays : [];
 }
 
 function normalizeVoicePreset(sound) {
@@ -710,6 +735,75 @@ function getAlarmMessageInputValue(alarm) {
 
 function getAlarmListTitle(alarm) {
   return getAlarmTitleInputValue(alarm) || "새 알림";
+}
+
+function splitAlarmTime(time) {
+  const normalized = normalizeAlarmTime(time);
+  const [hour, minute] = normalized.split(":");
+  return { hour, minute };
+}
+
+function formatAlarmTime(time) {
+  const { hour, minute } = splitAlarmTime(time);
+  return minute === "00" ? `${Number(hour)}시` : `${Number(hour)}시 ${minute}분`;
+}
+
+function formatAlarmDaySummary(days) {
+  const normalizedDays = normalizeAlarmDays(days);
+  if (normalizedDays.length === alarmDayOrder.length) return "매일";
+  if (!normalizedDays.length) return "요일 없음";
+  return normalizedDays.map((day) => alarmDayLabels[day]).join("");
+}
+
+function renderAlarmTimeControls(time) {
+  const { hour, minute } = splitAlarmTime(time);
+  return `
+    <div class="alarm-time-control">
+      <select id="alarmHourInput" aria-label="알림 시">
+        ${Array.from({ length: 24 }, (_, value) => {
+          const padded = String(value).padStart(2, "0");
+          return `<option value="${padded}" ${padded === hour ? "selected" : ""}>${value}시</option>`;
+        }).join("")}
+      </select>
+      <select id="alarmMinuteInput" aria-label="알림 분">
+        ${Array.from({ length: 60 }, (_, value) => {
+          const padded = String(value).padStart(2, "0");
+          return `<option value="${padded}" ${padded === minute ? "selected" : ""}>${padded}분</option>`;
+        }).join("")}
+      </select>
+    </div>
+  `;
+}
+
+function renderAlarmDayControls(days) {
+  const selectedDays = normalizeAlarmDays(days);
+  return `
+    <fieldset class="alarm-days-field">
+      <legend>반복 요일</legend>
+      <div class="alarm-day-grid">
+        ${alarmDayOrder
+          .map(
+            (day) => `
+              <label class="alarm-day-chip">
+                <input type="checkbox" value="${day}" data-alarm-day="${day}" ${selectedDays.includes(day) ? "checked" : ""} />
+                <span>${alarmDayLabels[day]}</span>
+              </label>
+            `,
+          )
+          .join("")}
+      </div>
+    </fieldset>
+  `;
+}
+
+function getAlarmTimeFromForm(container) {
+  const hour = container.querySelector("#alarmHourInput")?.value || "00";
+  const minute = container.querySelector("#alarmMinuteInput")?.value || "00";
+  return normalizeAlarmTime(`${hour}:${minute}`);
+}
+
+function getAlarmDaysFromForm(container) {
+  return [...container.querySelectorAll("[data-alarm-day]:checked")].map((input) => input.value);
 }
 
 function isScheduledAlarmEnabled(alarm) {
@@ -2479,7 +2573,7 @@ function renderAlarmsAdmin(container) {
                     (item) => `
                       <button class="list-button alarm-list-button ${alarm && item.id === alarm.id ? "is-active" : ""}" type="button" data-select-alarm="${item.id}">
                         <strong>${escapeHtml(getAlarmListTitle(item))}</strong>
-                        <span>${item.isDraft ? "저장 전" : escapeHtml(item.time)}</span>
+                        <span>${item.isDraft ? "저장 전" : `${escapeHtml(formatAlarmTime(item.time))} · ${escapeHtml(formatAlarmDaySummary(item.repeatDays))}`}</span>
                       </button>
                     `,
                   )
@@ -2507,9 +2601,10 @@ function renderAlarmsAdmin(container) {
               </label>
               <label class="field">
                 <span>알림 시간</span>
-                <input id="alarmTimeInput" type="time" value="${escapeAttr(alarm.time)}" />
+                ${renderAlarmTimeControls(alarm.time)}
               </label>
             </div>
+            ${renderAlarmDayControls(alarm.repeatDays)}
             <label class="field alarm-message-field">
               <span>음성으로 읽을 문구</span>
               <textarea id="alarmSpokenMessageInput" placeholder="예: 소모품 확인하고 부족한 품목을 채워주세요.">${escapeHtml(alarmMessageValue)}</textarea>
@@ -2594,18 +2689,22 @@ function validateAlarmForm(container) {
     messageInput.focus();
     return false;
   }
+  if (!getAlarmDaysFromForm(container).length) {
+    alert("알림이 울릴 요일을 하나 이상 선택해주세요.");
+    return false;
+  }
   return true;
 }
 
 function applySimpleAlarmForm(container, alarm, { activate = false } = {}) {
   const spokenMessage = container.querySelector("#alarmSpokenMessageInput").value.trim();
   alarm.title = container.querySelector("#alarmTitleInput").value.trim();
-  alarm.time = container.querySelector("#alarmTimeInput").value || alarm.time;
+  alarm.time = getAlarmTimeFromForm(container);
   alarm.message = spokenMessage;
   alarm.spokenMessage = spokenMessage;
   alarm.soundId = "sound_default";
   alarm.snoozeMinutes = 10;
-  alarm.repeatDays = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+  alarm.repeatDays = getAlarmDaysFromForm(container);
   if (activate) {
     alarm.isDraft = false;
     alarm.isActive = true;

@@ -831,8 +831,63 @@ th {
 
 .alarm-form-grid {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(150px, 0.45fr);
+  grid-template-columns: minmax(180px, 1fr) minmax(210px, 0.5fr);
   gap: 12px;
+}
+
+.alarm-time-control {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) minmax(90px, 1fr);
+  gap: 8px;
+}
+
+.alarm-days-field {
+  margin: 14px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.alarm-days-field legend {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.alarm-day-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(48px, 1fr));
+  gap: 8px;
+}
+
+.alarm-day-chip {
+  position: relative;
+  min-height: 44px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.alarm-day-chip input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.alarm-day-chip span {
+  width: 100%;
+  min-height: 44px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 8px;
+  background: #eef2f4;
+  color: var(--muted);
+  font-weight: 900;
+}
+
+.alarm-day-chip input:checked + span {
+  background: var(--teal);
+  color: white;
 }
 
 .alarm-message-field {
