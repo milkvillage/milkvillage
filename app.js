@@ -2673,12 +2673,12 @@ function triggerAlarm(alarm, source = "schedule", scheduledAt = "") {
   showAlarmModal(getAlarmDisplayFromEvent(eventLog));
 }
 
-function showAlarmModal(alarm) {
+function showAlarmModal(alarm, { playSound = true, immediate = true } = {}) {
   els.alarmTitle.textContent = alarm.title;
   els.alarmMessage.textContent = alarm.message;
   if (els.soundHelp) els.soundHelp.hidden = true;
   els.alarmModal.hidden = false;
-  startAlarmSound(alarm);
+  if (playSound) startAlarmSound(alarm, { immediate });
 }
 
 function closeAlarmModal() {
@@ -2733,8 +2733,8 @@ function syncAlarmModalFromRemote(source = "realtime") {
   const isNewEvent = state.activeAlarmEventId !== openEvent.id;
   state.activeAlarmEventId = openEvent.id;
   const alarm = getAlarmDisplayFromEvent(openEvent);
-  showAlarmModal(alarm);
-  if (isNewEvent && source !== "local") startAlarmSound(alarm, { forceRestart: true });
+  showAlarmModal(alarm, { playSound: false });
+  startAlarmSound(alarm, { forceRestart: isNewEvent && source !== "local", immediate: isNewEvent });
 }
 
 function acknowledgeAlarm() {
@@ -2817,14 +2817,16 @@ function unlockAudio({ announce = true, immediate = false } = {}) {
   requestWakeLock();
   const activeEvent = db.alarmEventLogs.find((log) => log.id === state.activeAlarmEventId);
   const now = Date.now();
-  if (!announce && now - lastSpeechUnlockAttemptAt < 1200) return;
+  if (!announce && !activeEvent && now - lastSpeechUnlockAttemptAt < 1200) return;
   lastSpeechUnlockAttemptAt = now;
   const queuedSpeech = pendingSpeech;
   pendingSpeech = null;
+  let speechRequested = false;
   if (activeEvent?.status === "triggered") {
     startAlarmSound(getAlarmDisplayFromEvent(activeEvent), { forceRestart: true, immediate });
+    speechRequested = true;
   } else if (queuedSpeech) {
-    speakText(queuedSpeech.text, queuedSpeech.preset, true, {
+    speechRequested = speakText(queuedSpeech.text, queuedSpeech.preset, true, {
       repeat: queuedSpeech.repeat,
       eventId: queuedSpeech.eventId,
       unlockProbe: queuedSpeech.unlockProbe,
@@ -2832,10 +2834,11 @@ function unlockAudio({ announce = true, immediate = false } = {}) {
       immediate,
     });
   } else if (announce) {
-    speakText("매장 태블릿 음성 알림이 준비되었습니다.", getVoicePreset(db.settings.defaultSoundId), true, { unlockProbe: true, immediate });
+    speechRequested = speakText("매장 태블릿 음성 알림이 준비되었습니다.", getVoicePreset(db.settings.defaultSoundId), true, { unlockProbe: true, immediate });
   } else {
-    speakText("음성 준비", getVoicePreset(db.settings.defaultSoundId), true, { unlockProbe: true, volume: 0.7, immediate });
+    speechRequested = speakText("음성 준비", getVoicePreset(db.settings.defaultSoundId), true, { unlockProbe: true, volume: 0.7, immediate });
   }
+  if (immediate && speechRequested) markSpeechReady();
   if (els.soundHelp) els.soundHelp.hidden = true;
 }
 
@@ -2846,7 +2849,7 @@ function isTextEditingTarget(target) {
 function setupAutomaticAudioUnlock() {
   const autoUnlock = (event) => {
     if (event?.target?.closest?.("#soundUnlockButton")) return;
-    if (isTextEditingTarget(event?.target)) return;
+    if (event?.type === "keydown" && isTextEditingTarget(event?.target)) return;
     if (!state.audioUnlocked) unlockAudio({ announce: false, immediate: Boolean(event) });
   };
   window.setTimeout(autoUnlock, 500);
