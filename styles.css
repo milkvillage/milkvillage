@@ -740,6 +740,76 @@ th {
   background: #fbfcfd;
 }
 
+.alarm-admin-panel {
+  min-height: 100%;
+  display: grid;
+  grid-template-columns: minmax(220px, 0.36fr) minmax(320px, 1fr);
+}
+
+.alarm-list-panel,
+.alarm-editor-panel {
+  min-width: 0;
+  padding: 18px;
+}
+
+.alarm-list-panel {
+  border-right: 1px solid var(--line);
+}
+
+.alarm-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.alarm-panel-heading h3 {
+  margin: 0;
+  font-size: 21px;
+}
+
+.alarm-list-stack {
+  padding: 0;
+}
+
+.alarm-list-button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.alarm-list-button span {
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.alarm-form-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(150px, 0.45fr);
+  gap: 12px;
+}
+
+.alarm-message-field {
+  margin-top: 14px;
+}
+
+.alarm-message-field textarea {
+  min-height: 150px;
+  font-size: 18px;
+  line-height: 1.5;
+}
+
+.alarm-action-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
 .icon-button {
   width: 46px;
   height: 46px;
@@ -1294,6 +1364,8 @@ th {
   .ops-body,
   .ops-card--summary,
   .handover-form,
+  .alarm-admin-panel,
+  .alarm-form-grid,
   .manager-summary-grid,
   .summary-columns {
     grid-template-columns: 1fr;
@@ -1314,7 +1386,8 @@ th {
   }
 
   .admin-menu,
-  .admin-column {
+  .admin-column,
+  .alarm-list-panel {
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }

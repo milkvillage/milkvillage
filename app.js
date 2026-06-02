@@ -23,6 +23,10 @@ let lastRemoteUpdatedAt = "";
 let localRevisionAt = "";
 let audioContext = null;
 let pendingSpeech = null;
+let alarmToneTimer = null;
+let alarmSpeechTimer = null;
+let activeAlarmSoundEventId = "";
+let wakeLock = null;
 
 const state = {
   screen: "make",
@@ -31,6 +35,7 @@ const state = {
   selectedRecipeId: null,
   selectedVariantId: null,
   selectedAnalysisSupplyId: null,
+  selectedAlarmId: null,
   analysisMode: "weekday",
   operatorName: "",
   loadingVariantId: null,
@@ -2078,37 +2083,42 @@ function renderAdjustAdmin(container) {
 }
 
 function renderAlarmsAdmin(container) {
-  const selectedAlarmId = container.dataset.selectedAlarmId || db.alarms[0]?.id || "";
+  const selectedAlarmId = state.selectedAlarmId || db.alarms[0]?.id || "";
   const alarm = db.alarms.find((item) => item.id === selectedAlarmId) || db.alarms[0] || null;
+  state.selectedAlarmId = alarm?.id || null;
   container.innerHTML = `
-    <div class="admin-card">
-      <div class="alarm-row">
-        <strong>알림 목록</strong>
-        <button class="button button--ghost button--small" id="addAlarm" type="button">알림 추가</button>
-        <button class="button button--ghost button--small" id="testAlarm" type="button" ${alarm ? "" : "disabled"}>테스트 실행</button>
-        <button class="button button--danger button--small" id="deleteAlarm" type="button" ${alarm ? "" : "disabled"}>삭제</button>
-      </div>
-      <div class="list-stack">
+    <div class="alarm-admin-panel">
+      <section class="alarm-list-panel">
+        <div class="alarm-panel-heading">
+          <h3>알림</h3>
+          <button class="button button--primary button--small" id="addAlarm" type="button">추가</button>
+        </div>
+        <div class="list-stack alarm-list-stack">
+          ${
+            db.alarms.length
+              ? db.alarms
+                  .map(
+                    (item) => `
+                      <button class="list-button alarm-list-button ${alarm && item.id === alarm.id ? "is-active" : ""}" type="button" data-select-alarm="${item.id}">
+                        <strong>${escapeHtml(item.title)}</strong>
+                        <span>${escapeHtml(item.time)}</span>
+                      </button>
+                    `,
+                  )
+                  .join("")
+              : `<div class="empty-state">등록된 알림이 없습니다.</div>`
+          }
+        </div>
+      </section>
+      <section class="alarm-editor-panel">
         ${
-          db.alarms.length
-            ? db.alarms
-                .map(
-                  (item) => `
-                    <button class="list-button ${alarm && item.id === alarm.id ? "is-active" : ""}" type="button" data-select-alarm="${item.id}">
-                      ${escapeHtml(item.title)} · ${escapeHtml(item.time)}
-                    </button>
-                  `,
-                )
-                .join("")
-            : `<div class="empty-state">등록된 알림이 없습니다.</div>`
-        }
-      </div>
-    </div>
-    ${
-      alarm
-        ? `
-          <div class="admin-card">
-            <div class="form-grid">
+          alarm
+            ? `
+            <div class="alarm-panel-heading">
+              <h3>알림 설정</h3>
+              ${state.savedMessage ? `<span class="saved-note">${escapeHtml(state.savedMessage)}</span>` : ""}
+            </div>
+            <div class="alarm-form-grid">
               <label class="field">
                 <span>알림 이름</span>
                 <input id="alarmTitleInput" value="${escapeAttr(alarm.title)}" />
@@ -2118,43 +2128,44 @@ function renderAlarmsAdmin(container) {
                 <input id="alarmTimeInput" type="time" value="${escapeAttr(alarm.time)}" />
               </label>
             </div>
-            <label class="field">
+            <label class="field alarm-message-field">
               <span>음성으로 읽을 문구</span>
               <textarea id="alarmSpokenMessageInput">${escapeHtml(alarm.spokenMessage || alarm.message)}</textarea>
             </label>
-            <div class="button-row">
-              ${state.savedMessage ? `<span class="saved-note">${escapeHtml(state.savedMessage)}</span>` : ""}
+            <div class="alarm-action-row">
               <button class="button button--primary" id="saveAlarm" type="button">저장</button>
+              <button class="button button--ghost" id="testAlarm" type="button">테스트 실행</button>
+              <button class="button button--danger" id="deleteAlarm" type="button">삭제</button>
             </div>
-          </div>
-        `
-        : `
-          <div class="admin-card">
-            <div class="empty-state">필요할 때만 알림을 추가해서 사용하세요.</div>
-          </div>
-        `
-    }
+            `
+            : `<div class="empty-state">필요할 때만 알림을 추가해서 사용하세요.</div>`
+        }
+      </section>
+    </div>
   `;
   container.querySelectorAll("[data-select-alarm]").forEach((button) => {
     button.addEventListener("click", () => {
-      renderAlarmsAdminWithSelection(button.dataset.selectAlarm);
+      state.selectedAlarmId = button.dataset.selectAlarm;
+      state.savedMessage = "";
+      renderAdminScreen();
     });
   });
   container.querySelector("#addAlarm").addEventListener("click", () => {
     const alarm = makeAlarm(uid("alarm"), "새 알림", "알림 내용을 입력해주세요.", localTimeValue());
     db.alarms.push(alarm);
+    state.selectedAlarmId = alarm.id;
     saveDb();
     state.savedMessage = "알림이 추가되었습니다.";
-    renderAlarmsAdminWithSelection(alarm.id);
+    renderAdminScreen();
   });
-  container.querySelector("#deleteAlarm").addEventListener("click", () => {
+  container.querySelector("#deleteAlarm")?.addEventListener("click", () => {
     if (!alarm) return;
     db.alarms = db.alarms.filter((item) => item.id !== alarm.id);
-    container.dataset.selectedAlarmId = db.alarms[0]?.id || "";
+    state.selectedAlarmId = db.alarms[0]?.id || null;
     saveDb();
     renderAdminScreen();
   });
-  container.querySelector("#testAlarm").addEventListener("click", () => {
+  container.querySelector("#testAlarm")?.addEventListener("click", () => {
     if (!alarm) return;
     applySimpleAlarmForm(container, alarm);
     triggerAlarm(alarm, "test");
@@ -2164,7 +2175,8 @@ function renderAlarmsAdmin(container) {
     applySimpleAlarmForm(container, alarm);
     state.savedMessage = "저장 완료";
     saveDb();
-    renderAlarmsAdminWithSelection(alarm.id);
+    state.selectedAlarmId = alarm.id;
+    renderAdminScreen();
   });
 }
 
@@ -2183,12 +2195,8 @@ function applySimpleAlarmForm(container, alarm) {
 }
 
 function renderAlarmsAdminWithSelection(alarmId) {
+  state.selectedAlarmId = alarmId;
   renderAdminScreen();
-  const body = els.workArea.querySelector("#adminBody");
-  if (body) {
-    body.dataset.selectedAlarmId = alarmId;
-    renderAlarmsAdmin(body);
-  }
 }
 
 function renderAlarmLogsAdmin(container) {
@@ -2459,13 +2467,12 @@ function renderAllLogsAdmin(container) {
   `;
 }
 
-function triggerAlarm(alarm, source = "schedule") {
-  const triggeredAt = nowIso();
+function triggerAlarm(alarm, source = "schedule", scheduledAt = "") {
+  const triggeredAt = scheduledAt || nowIso();
   const existingEvent = findAlarmEventForMinute(alarm.id, new Date(triggeredAt));
   if (existingEvent?.status === "triggered") {
     state.activeAlarmEventId = existingEvent.id;
     showAlarmModal(getAlarmDisplayFromEvent(existingEvent));
-    speakAlarm(getAlarmDisplayFromEvent(existingEvent), source === "test");
     return;
   }
 
@@ -2489,8 +2496,7 @@ function triggerAlarm(alarm, source = "schedule") {
   db.alarmEventLogs.push(eventLog);
   state.activeAlarmEventId = eventLog.id;
   saveDb();
-  showAlarmModal(alarm);
-  speakAlarm(alarm, source === "test");
+  showAlarmModal(getAlarmDisplayFromEvent(eventLog));
 }
 
 function showAlarmModal(alarm) {
@@ -2498,9 +2504,11 @@ function showAlarmModal(alarm) {
   els.alarmMessage.textContent = alarm.message;
   els.soundHelp.hidden = state.audioUnlocked;
   els.alarmModal.hidden = false;
+  startAlarmSound(alarm);
 }
 
 function closeAlarmModal() {
+  stopAlarmSound();
   els.alarmModal.hidden = true;
 }
 
@@ -2552,7 +2560,7 @@ function syncAlarmModalFromRemote(source = "realtime") {
   state.activeAlarmEventId = openEvent.id;
   const alarm = getAlarmDisplayFromEvent(openEvent);
   showAlarmModal(alarm);
-  if (isNewEvent && source !== "local") speakAlarm(alarm);
+  if (isNewEvent && source !== "local") startAlarmSound(alarm, { forceRestart: true });
 }
 
 function acknowledgeAlarm() {
@@ -2587,14 +2595,15 @@ function snoozeAlarm() {
 function checkAlarms() {
   const now = new Date();
   const day = dayKeys[now.getDay()];
-  const currentTime = localTimeValue(now);
   let changed = false;
 
   db.alarms
-    .filter((alarm) => alarm.isActive && alarm.repeatDays.includes(day) && alarm.time === currentTime)
+    .filter((alarm) => alarm.isActive && alarm.repeatDays.includes(day))
     .forEach((alarm) => {
-      const alreadyTriggered = Boolean(findAlarmEventForMinute(alarm.id, now));
-      if (!alreadyTriggered) triggerAlarm(alarm);
+      const scheduledAt = getScheduledAlarmDate(alarm, now);
+      const isDue = scheduledAt <= now && now - scheduledAt < 2 * 60 * 1000;
+      const alreadyTriggered = Boolean(findAlarmEventForMinute(alarm.id, scheduledAt));
+      if (isDue && !alreadyTriggered) triggerAlarm(alarm, "schedule", scheduledAt.toISOString());
     });
 
   db.alarmEventLogs
@@ -2609,12 +2618,24 @@ function checkAlarms() {
   if (changed) saveDb();
 }
 
+function getScheduledAlarmDate(alarm, date = new Date()) {
+  const [hours = 0, minutes = 0] = String(alarm.time || "00:00").split(":").map(Number);
+  const scheduledAt = new Date(date);
+  scheduledAt.setHours(Number.isFinite(hours) ? hours : 0, Number.isFinite(minutes) ? minutes : 0, 0, 0);
+  return scheduledAt;
+}
+
 function unlockAudio({ announce = true } = {}) {
   state.audioUnlocked = true;
   ensureAudioReady();
+  primeAlarmAudio();
+  requestWakeLock();
   const queuedSpeech = pendingSpeech;
   pendingSpeech = null;
-  if (queuedSpeech) {
+  const activeEvent = db.alarmEventLogs.find((log) => log.id === state.activeAlarmEventId);
+  if (activeEvent?.status === "triggered") {
+    startAlarmSound(getAlarmDisplayFromEvent(activeEvent), { forceRestart: true });
+  } else if (queuedSpeech) {
     speakText(queuedSpeech.text, queuedSpeech.preset, true);
   } else if (announce) {
     speakText("음성 알림이 준비되었습니다.", getVoicePreset(db.settings.defaultSoundId), true);
@@ -2632,6 +2653,39 @@ function setupAutomaticAudioUnlock() {
   ["pointerdown", "touchstart", "keydown"].forEach((eventName) => {
     document.addEventListener(eventName, autoUnlock, { once: true, capture: true });
   });
+}
+
+function startAlarmSound(alarm, { forceRestart = false } = {}) {
+  const soundEventId = state.activeAlarmEventId || `${alarm?.id || "alarm"}:${alarm?.time || ""}`;
+  if (!forceRestart && activeAlarmSoundEventId === soundEventId && alarmToneTimer) return;
+  stopAlarmSound();
+  activeAlarmSoundEventId = soundEventId;
+
+  const playTone = () => {
+    const played = playAlarmPulse();
+    if (!played) els.soundHelp.hidden = false;
+  };
+  const speak = () => speakAlarm(alarm, true);
+
+  playTone();
+  window.setTimeout(playTone, 520);
+  alarmToneTimer = window.setInterval(playTone, 1600);
+  speak();
+  alarmSpeechTimer = window.setInterval(speak, 15000);
+}
+
+function stopAlarmSound() {
+  window.clearInterval(alarmToneTimer);
+  window.clearInterval(alarmSpeechTimer);
+  alarmToneTimer = null;
+  alarmSpeechTimer = null;
+  activeAlarmSoundEventId = "";
+  pendingSpeech = null;
+  try {
+    window.speechSynthesis?.cancel();
+  } catch {
+    // Speech synthesis can be unavailable or locked by the browser.
+  }
 }
 
 function getSpeechVoices() {
@@ -2706,6 +2760,40 @@ function primeSpeechSynthesis() {
   }
 }
 
+function primeAlarmAudio() {
+  try {
+    const context = ensureAudioReady();
+    if (!context) return;
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.value = 440;
+    gain.gain.value = 0.001;
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.03);
+    oscillator.onended = () => {
+      oscillator.disconnect();
+      gain.disconnect();
+    };
+  } catch {
+    // A silent unlock tone is best-effort only.
+  }
+}
+
+async function requestWakeLock() {
+  if (!("wakeLock" in navigator) || wakeLock) return;
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    wakeLock.addEventListener("release", () => {
+      wakeLock = null;
+    });
+  } catch {
+    // Wake lock is optional and depends on browser support.
+  }
+}
+
 function ensureAudioReady() {
   try {
     const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -2734,6 +2822,50 @@ function playDefaultBeep() {
   } catch {
     els.soundHelp.hidden = false;
   }
+}
+
+function playAlarmPulse() {
+  try {
+    const context = ensureAudioReady();
+    if (!context) return false;
+    if (context.state === "suspended") {
+      context.resume?.().then(() => playAlarmPulse());
+      return false;
+    }
+
+    const now = context.currentTime;
+    [
+      [880, 0, 0.18],
+      [1175, 0.24, 0.2],
+      [880, 0.52, 0.24],
+    ].forEach(([frequency, offset, duration]) => {
+      playAlarmTone(context, frequency, now + offset, duration);
+    });
+    els.soundHelp.hidden = true;
+    return true;
+  } catch {
+    els.soundHelp.hidden = false;
+    return false;
+  }
+}
+
+function playAlarmTone(context, frequency, startAt, duration) {
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  oscillator.type = "sine";
+  oscillator.frequency.setValueAtTime(frequency, startAt);
+  gain.gain.setValueAtTime(0.001, startAt);
+  gain.gain.linearRampToValueAtTime(0.18, startAt + 0.025);
+  gain.gain.setValueAtTime(0.18, startAt + Math.max(0.03, duration - 0.05));
+  gain.gain.exponentialRampToValueAtTime(0.001, startAt + duration);
+  oscillator.connect(gain);
+  gain.connect(context.destination);
+  oscillator.start(startAt);
+  oscillator.stop(startAt + duration + 0.04);
+  oscillator.onended = () => {
+    oscillator.disconnect();
+    gain.disconnect();
+  };
 }
 
 function dayLabel(day) {
@@ -2801,7 +2933,12 @@ els.alarmSnooze.addEventListener("click", snoozeAlarm);
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeCancelModal();
-    closeAlarmModal();
+  }
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    checkAlarms();
+    if (state.audioUnlocked) requestWakeLock();
   }
 });
 
@@ -2809,4 +2946,4 @@ render();
 checkAlarms();
 initRemoteSync();
 setupAutomaticAudioUnlock();
-setInterval(checkAlarms, 60 * 1000);
+setInterval(checkAlarms, 15 * 1000);
