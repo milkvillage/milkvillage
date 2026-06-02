@@ -2631,9 +2631,7 @@ function renderAlarmsAdmin(container) {
   const alarm = db.alarms.find((item) => item.id === selectedAlarmId) || db.alarms[0] || null;
   state.selectedAlarmId = alarm?.id || null;
   const alarmTitleValue = getAlarmTitleInputValue(alarm);
-  const alarmMessageValue = getAlarmMessageInputValue(alarm);
   const alarmTitleChoices = getAlarmTitleChoices();
-  const alarmMessageChoices = getAlarmMessageChoices();
   container.innerHTML = `
     <div class="alarm-admin-panel">
       <section class="alarm-list-panel">
@@ -2687,11 +2685,6 @@ function renderAlarmsAdmin(container) {
                 ${renderAlarmSoundOptions(alarm.soundId || db.settings.defaultSoundId)}
               </select>
             </label>
-            <label class="field alarm-message-field">
-              <span>음성으로 읽을 문구</span>
-              <textarea id="alarmSpokenMessageInput" placeholder="예: 소모품 확인하고 부족한 품목을 채워주세요.">${escapeHtml(alarmMessageValue)}</textarea>
-              ${renderAlarmQuickChoices(alarmMessageChoices, "fill-alarm-message")}
-            </label>
             <div class="alarm-action-row">
               <button class="button button--primary" id="saveAlarm" type="button">저장</button>
               <button class="button button--ghost" id="testAlarm" type="button">테스트 실행</button>
@@ -2717,7 +2710,7 @@ function renderAlarmsAdmin(container) {
     alarm.isActive = false;
     db.alarms.push(alarm);
     state.selectedAlarmId = alarm.id;
-    state.savedMessage = "내용을 입력한 뒤 저장하면 알림이 작동합니다.";
+    state.savedMessage = "알림 이름, 시간, 요일, 알림음을 선택한 뒤 저장하면 작동합니다.";
     saveDb();
     renderAdminScreen();
   });
@@ -2725,13 +2718,6 @@ function renderAlarmsAdmin(container) {
     button.addEventListener("click", () => {
       const input = container.querySelector("#alarmTitleInput");
       input.value = button.dataset.fillAlarmTitle || "";
-      input.focus();
-    });
-  });
-  container.querySelectorAll("[data-fill-alarm-message]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const input = container.querySelector("#alarmSpokenMessageInput");
-      input.value = button.dataset.fillAlarmMessage || "";
       input.focus();
     });
   });
@@ -2764,15 +2750,9 @@ function renderAlarmsAdmin(container) {
 
 function validateAlarmForm(container) {
   const titleInput = container.querySelector("#alarmTitleInput");
-  const messageInput = container.querySelector("#alarmSpokenMessageInput");
   if (!titleInput.value.trim()) {
     alert("알림 이름을 입력한 뒤 저장해주세요.");
     titleInput.focus();
-    return false;
-  }
-  if (!messageInput.value.trim()) {
-    alert("음성으로 읽을 문구를 입력한 뒤 저장해주세요.");
-    messageInput.focus();
     return false;
   }
   if (!getAlarmDaysFromForm(container).length) {
@@ -2783,18 +2763,18 @@ function validateAlarmForm(container) {
 }
 
 function applySimpleAlarmForm(container, alarm, { activate = false } = {}) {
-  const spokenMessage = container.querySelector("#alarmSpokenMessageInput").value.trim();
-  alarm.title = container.querySelector("#alarmTitleInput").value.trim();
+  const title = container.querySelector("#alarmTitleInput").value.trim();
+  alarm.title = title;
   alarm.time = getAlarmTimeFromForm(container);
-  alarm.message = spokenMessage;
-  alarm.spokenMessage = spokenMessage;
+  alarm.message = `${title} 알림입니다.`;
+  alarm.spokenMessage = "";
   alarm.soundId = container.querySelector("#alarmSoundInput")?.value || db.settings.defaultSoundId || DEFAULT_ALARM_SOUND_ID;
   alarm.snoozeMinutes = 10;
   alarm.repeatDays = getAlarmDaysFromForm(container);
   if (activate) {
     alarm.isDraft = false;
     alarm.isActive = true;
-    rememberAlarmText(alarm.title, alarm.spokenMessage);
+    rememberAlarmText(alarm.title, "");
   }
   alarm.requiresAcknowledgement = true;
   alarm.updatedAt = nowIso();
@@ -3301,24 +3281,9 @@ function unlockAudio({ announce = true, immediate = false } = {}) {
   const now = Date.now();
   if (!announce && !activeEvent && now - lastSpeechUnlockAttemptAt < 1200) return;
   lastSpeechUnlockAttemptAt = now;
-  const queuedSpeech = pendingSpeech;
   pendingSpeech = null;
-  let speechRequested = false;
   if (activeEvent?.status === "triggered") {
     startAlarmSound(getAlarmDisplayFromEvent(activeEvent), { forceRestart: true, immediate });
-    speechRequested = true;
-  } else if (queuedSpeech) {
-    speechRequested = speakText(queuedSpeech.text, queuedSpeech.preset, true, {
-      repeat: queuedSpeech.repeat,
-      eventId: queuedSpeech.eventId,
-      unlockProbe: queuedSpeech.unlockProbe,
-      volume: queuedSpeech.volume,
-      immediate,
-    });
-  } else if (announce) {
-    speechRequested = speakText("매장 태블릿 음성 알림이 준비되었습니다.", getVoicePreset(db.settings.defaultSoundId), true, { unlockProbe: true, immediate });
-  } else {
-    speechRequested = speakText("음성 준비", getVoicePreset(db.settings.defaultSoundId), true, { unlockProbe: true, volume: 0.7, immediate });
   }
   if (els.soundHelp) els.soundHelp.hidden = true;
 }
@@ -3349,7 +3314,6 @@ function startAlarmSound(alarm, { forceRestart = false, immediate = false } = {}
   requestWakeLock();
   primeAudioOutput();
   playAlarmFileSound(alarm, { eventId: soundEventId });
-  speakAlarm(alarm, true, { repeat: true, eventId: soundEventId, immediate });
 }
 
 function stopAlarmSound() {
