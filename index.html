@@ -120,7 +120,30 @@
       });
       if ("serviceWorker" in navigator) {
         window.addEventListener("load", () => {
-          navigator.serviceWorker.register("./service-worker.js").catch(() => {});
+          let refreshing = false;
+          navigator.serviceWorker.addEventListener("controllerchange", () => {
+            if (refreshing) return;
+            refreshing = true;
+            window.location.reload();
+          });
+          navigator.serviceWorker
+            .register("./service-worker.js")
+            .then((registration) => {
+              const activateWaitingWorker = () => {
+                registration.waiting?.postMessage({ type: "SKIP_WAITING" });
+              };
+              activateWaitingWorker();
+              registration.update?.();
+              registration.addEventListener("updatefound", () => {
+                const worker = registration.installing;
+                worker?.addEventListener("statechange", () => {
+                  if (worker.state === "installed" && navigator.serviceWorker.controller) {
+                    worker.postMessage({ type: "SKIP_WAITING" });
+                  }
+                });
+              });
+            })
+            .catch(() => {});
         });
       }
     </script>
