@@ -2807,7 +2807,7 @@ function showSpeechTouchHelp() {
   render();
 }
 
-function unlockAudio({ announce = true } = {}) {
+function unlockAudio({ announce = true, immediate = false } = {}) {
   prepareSpeechVoices();
   requestWakeLock();
   const activeEvent = db.alarmEventLogs.find((log) => log.id === state.activeAlarmEventId);
@@ -2817,26 +2817,28 @@ function unlockAudio({ announce = true } = {}) {
   const queuedSpeech = pendingSpeech;
   pendingSpeech = null;
   if (activeEvent?.status === "triggered") {
-    startAlarmSound(getAlarmDisplayFromEvent(activeEvent), { forceRestart: true });
+    startAlarmSound(getAlarmDisplayFromEvent(activeEvent), { forceRestart: true, immediate });
   } else if (queuedSpeech) {
     speakText(queuedSpeech.text, queuedSpeech.preset, true, {
       repeat: queuedSpeech.repeat,
       eventId: queuedSpeech.eventId,
       unlockProbe: queuedSpeech.unlockProbe,
       volume: queuedSpeech.volume,
+      immediate,
     });
   } else if (announce) {
-    speakText("매장 태블릿 음성 알림이 준비되었습니다.", getVoicePreset(db.settings.defaultSoundId), true, { unlockProbe: true });
+    speakText("매장 태블릿 음성 알림이 준비되었습니다.", getVoicePreset(db.settings.defaultSoundId), true, { unlockProbe: true, immediate });
   } else {
-    speakText("음성 준비", getVoicePreset(db.settings.defaultSoundId), true, { unlockProbe: true, volume: 0.7 });
+    speakText("음성 준비", getVoicePreset(db.settings.defaultSoundId), true, { unlockProbe: true, volume: 0.7, immediate });
   }
   render();
   if (els.soundHelp) els.soundHelp.hidden = true;
 }
 
 function setupAutomaticAudioUnlock() {
-  const autoUnlock = () => {
-    if (!state.audioUnlocked) unlockAudio({ announce: false });
+  const autoUnlock = (event) => {
+    if (event?.target?.closest?.("#soundUnlockButton")) return;
+    if (!state.audioUnlocked) unlockAudio({ announce: false, immediate: Boolean(event) });
   };
   window.setTimeout(autoUnlock, 500);
   window.setTimeout(autoUnlock, 2500);
@@ -2847,13 +2849,13 @@ function setupAutomaticAudioUnlock() {
   });
 }
 
-function startAlarmSound(alarm, { forceRestart = false } = {}) {
+function startAlarmSound(alarm, { forceRestart = false, immediate = false } = {}) {
   const soundEventId = state.activeAlarmEventId || `${alarm?.id || "alarm"}:${alarm?.time || ""}`;
   if (!forceRestart && activeAlarmSoundEventId === soundEventId) return;
   stopAlarmSound();
   activeAlarmSoundEventId = soundEventId;
   requestWakeLock();
-  speakAlarm(alarm, true, { repeat: true, eventId: soundEventId });
+  speakAlarm(alarm, true, { repeat: true, eventId: soundEventId, immediate });
 }
 
 function stopAlarmSound() {
@@ -2914,11 +2916,11 @@ function speakAlarm(alarm, allowWhileLocked = false, options = {}) {
   speakText(alarm.spokenMessage || alarm.message || alarm.title, preset, allowWhileLocked, options);
 }
 
-function speakText(text, preset, allowWhileLocked = false, { retry = 0, repeat = false, eventId = "", unlockProbe = false, volume = null } = {}) {
+function speakText(text, preset, allowWhileLocked = false, { retry = 0, repeat = false, eventId = "", unlockProbe = false, volume = null, immediate = false } = {}) {
   const phrase = String(text || "").trim();
   if (!phrase) return false;
   if (!state.audioUnlocked && !allowWhileLocked) {
-    pendingSpeech = { text: phrase, preset, repeat, eventId, unlockProbe, volume };
+    pendingSpeech = { text: phrase, preset, repeat, eventId, unlockProbe, volume, immediate };
     return false;
   }
   if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) {
@@ -2958,36 +2960,43 @@ function speakText(text, preset, allowWhileLocked = false, { retry = 0, repeat =
     if (repeat) showSpeechTouchHelp();
     scheduleSpeechRetry(phrase, preset, 500, retry + 1, { repeat, eventId: speechEventId, unlockProbe, volume });
   };
+  const speakNow = () => {
+    if (!isCurrentAlarmSpeech()) return;
+    try {
+      window.speechSynthesis.speak(utterance);
+      window.clearTimeout(alarmSpeechRetryTimer);
+      alarmSpeechRetryTimer = window.setTimeout(() => {
+        if (!finished && isCurrentAlarmSpeech()) {
+          try {
+            window.speechSynthesis.cancel();
+          } catch {
+            // Keep retrying speech below.
+          }
+          if (repeat) showSpeechTouchHelp();
+          scheduleSpeechRetry(phrase, preset, 500, retry + 1, { repeat, eventId: speechEventId, unlockProbe, volume });
+        }
+      }, estimateSpeechWatchdogDelay(phrase));
+      window.setTimeout(() => {
+        if (!started && !finished && isCurrentAlarmSpeech()) {
+          if (repeat) showSpeechTouchHelp();
+          window.speechSynthesis.resume?.();
+        }
+      }, 1200);
+    } catch {
+      if (repeat) showSpeechTouchHelp();
+      scheduleSpeechRetry(phrase, preset, 500, retry + 1, { repeat, eventId: speechEventId, unlockProbe, volume });
+    }
+  };
   try {
-    window.speechSynthesis.cancel();
+    if (window.speechSynthesis.pending || (window.speechSynthesis.speaking && repeat)) {
+      window.speechSynthesis.cancel();
+    }
     window.speechSynthesis.resume?.();
-    window.setTimeout(() => {
-      if (!isCurrentAlarmSpeech()) return;
-      try {
-        window.speechSynthesis.speak(utterance);
-        window.clearTimeout(alarmSpeechRetryTimer);
-        alarmSpeechRetryTimer = window.setTimeout(() => {
-          if (!finished && isCurrentAlarmSpeech()) {
-            try {
-              window.speechSynthesis.cancel();
-            } catch {
-              // Keep retrying speech below.
-            }
-            if (repeat) showSpeechTouchHelp();
-            scheduleSpeechRetry(phrase, preset, 500, retry + 1, { repeat, eventId: speechEventId, unlockProbe, volume });
-          }
-        }, estimateSpeechWatchdogDelay(phrase));
-        window.setTimeout(() => {
-          if (!started && !finished && isCurrentAlarmSpeech()) {
-            if (repeat) showSpeechTouchHelp();
-            window.speechSynthesis.resume?.();
-          }
-        }, 1200);
-      } catch {
-        if (repeat) showSpeechTouchHelp();
-        scheduleSpeechRetry(phrase, preset, 500, retry + 1, { repeat, eventId: speechEventId, unlockProbe, volume });
-      }
-    }, voices.length ? 80 : 350);
+    if (immediate) {
+      speakNow();
+    } else {
+      window.setTimeout(speakNow, voices.length ? 80 : 350);
+    }
     return true;
   } catch {
     if (repeat) showSpeechTouchHelp();
@@ -3106,8 +3115,8 @@ els.navButtons.forEach((button) => {
   button.addEventListener("click", () => setScreen(button.dataset.screen));
 });
 els.adminShortcut.addEventListener("click", () => setScreen("admin"));
-els.soundUnlockButton.addEventListener("click", () => unlockAudio({ announce: true }));
-els.soundHelpButton?.addEventListener("click", () => unlockAudio({ announce: true }));
+els.soundUnlockButton.addEventListener("click", () => unlockAudio({ announce: true, immediate: true }));
+els.soundHelpButton?.addEventListener("click", () => unlockAudio({ announce: true, immediate: true }));
 els.cancelClose.addEventListener("click", closeCancelModal);
 els.cancelConfirm.addEventListener("click", () => {
   cancelPrepBatch(state.pendingCancelBatchId, els.cancelReason.value.trim());
