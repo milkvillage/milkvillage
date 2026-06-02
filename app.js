@@ -935,7 +935,7 @@ function render() {
     <span class="icon" aria-hidden="true">
       <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19 6a9 9 0 0 1 0 12"/></svg>
     </span>
-    ${state.audioUnlocked ? "음성 자동대기 중" : "음성 준비 시작"}
+    ${state.audioUnlocked ? "음성 자동대기 중" : "음성 자동준비 중"}
   `;
 
   if (state.screen === "make") renderMakeScreen();
@@ -2838,6 +2838,10 @@ function setupAutomaticAudioUnlock() {
   const autoUnlock = () => {
     if (!state.audioUnlocked) unlockAudio({ announce: false });
   };
+  window.setTimeout(autoUnlock, 500);
+  window.setTimeout(autoUnlock, 2500);
+  window.addEventListener("focus", autoUnlock);
+  window.addEventListener("pageshow", autoUnlock);
   ["pointerdown", "touchstart", "keydown"].forEach((eventName) => {
     document.addEventListener(eventName, autoUnlock, { capture: true });
   });
@@ -3121,6 +3125,7 @@ document.addEventListener("keydown", (event) => {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     checkAlarms();
+    if (!state.audioUnlocked) unlockAudio({ announce: false });
     if (state.audioUnlocked) requestWakeLock();
   }
 });
