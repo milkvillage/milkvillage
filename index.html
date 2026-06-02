@@ -3,7 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>밀크빌리지 재료·재고 관리</title>
+    <meta name="theme-color" content="#0f766e" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Milk Village" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./app-icon.svg" type="image/svg+xml" />
+    <title>Milk Village 관리</title>
     <script>
       window.__MILK_VILLAGE_VERSION__ = fetch("./version.json?ts=" + Date.now(), { cache: "no-store" })
         .then((response) => response.json())
@@ -31,7 +37,7 @@
             <span class="icon" aria-hidden="true">
               <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19 6a9 9 0 0 1 0 12"/></svg>
             </span>
-            음성 알림 대기 중
+            음성 알림 대기
           </button>
           <button class="pill-button pill-button--admin" id="adminShortcut" type="button">
             <span class="icon" aria-hidden="true">
@@ -114,6 +120,11 @@
         script.src = `./app.js?v=${encodeURIComponent(version)}`;
         document.body.appendChild(script);
       });
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () => {
+          navigator.serviceWorker.register("./service-worker.js").catch(() => {});
+        });
+      }
     </script>
   </body>
 </html>

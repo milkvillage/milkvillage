@@ -1,0 +1,20 @@
+{
+  "name": "Milk Village 관리",
+  "short_name": "Milk Village",
+  "description": "Milk Village 매장 재료, 재고, 알림, 운영 체크 관리",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "any",
+  "background_color": "#f3f6f7",
+  "theme_color": "#0f766e",
+  "icons": [
+    {
+      "src": "./app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
