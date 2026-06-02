@@ -25,8 +25,10 @@ let audioContext = null;
 let pendingSpeech = null;
 let alarmToneTimer = null;
 let alarmSpeechTimer = null;
+let alarmSpeechRetryTimer = null;
 let activeAlarmSoundEventId = "";
 let wakeLock = null;
+let speechVoicesPrepared = false;
 
 const state = {
   screen: "make",
@@ -2675,6 +2677,7 @@ function unlockAudio({ announce = true } = {}) {
   state.audioUnlocked = true;
   ensureAudioReady();
   primeAlarmAudio();
+  prepareSpeechVoices();
   requestWakeLock();
   const queuedSpeech = pendingSpeech;
   pendingSpeech = null;
@@ -2717,14 +2720,17 @@ function startAlarmSound(alarm, { forceRestart = false } = {}) {
   window.setTimeout(playTone, 520);
   alarmToneTimer = window.setInterval(playTone, 1600);
   speak();
-  alarmSpeechTimer = window.setInterval(speak, 15000);
+  window.setTimeout(speak, 2600);
+  alarmSpeechTimer = window.setInterval(speak, 18000);
 }
 
 function stopAlarmSound() {
   window.clearInterval(alarmToneTimer);
   window.clearInterval(alarmSpeechTimer);
+  window.clearTimeout(alarmSpeechRetryTimer);
   alarmToneTimer = null;
   alarmSpeechTimer = null;
+  alarmSpeechRetryTimer = null;
   activeAlarmSoundEventId = "";
   pendingSpeech = null;
   try {
@@ -2755,42 +2761,102 @@ function speakAlarm(alarm, allowWhileLocked = false) {
   speakText(alarm.spokenMessage || alarm.message || alarm.title, preset, allowWhileLocked);
 }
 
-function speakText(text, preset, allowWhileLocked = false) {
+function speakText(text, preset, allowWhileLocked = false, { retry = 0 } = {}) {
+  const phrase = String(text || "").trim();
+  if (!phrase) return false;
   if (allowWhileLocked) state.audioUnlocked = true;
   if (!state.audioUnlocked) {
-    pendingSpeech = { text, preset };
+    pendingSpeech = { text: phrase, preset };
     els.soundHelp.hidden = false;
-    return;
+    return false;
   }
   els.soundHelp.hidden = true;
   ensureAudioReady();
   if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) {
     playDefaultBeep();
-    return;
+    els.soundHelp.hidden = false;
+    return false;
   }
-  const utterance = new window.SpeechSynthesisUtterance(text);
   const voices = getSpeechVoices();
-  const selectedVoice = voices.find((voice) => voice.voiceURI === preset?.voiceURI) || voices.find((voice) => voice.lang.toLowerCase().startsWith("ko"));
+  if (!voices.length && retry < 8) {
+    scheduleSpeechRetry(phrase, preset, 500 + retry * 250, retry + 1);
+  }
+  const utterance = new window.SpeechSynthesisUtterance(phrase);
+  const selectedVoice = selectSpeechVoice(voices, preset);
+  const speechEventId = activeAlarmSoundEventId;
+  let started = false;
+  let finished = false;
   if (selectedVoice) utterance.voice = selectedVoice;
   utterance.lang = selectedVoice?.lang || preset?.lang || "ko-KR";
   utterance.rate = Number(preset?.rate || 0.92);
   utterance.pitch = Number(preset?.pitch || 1);
   utterance.volume = Number(preset?.volume || 1);
+  utterance.onstart = () => {
+    started = true;
+    els.soundHelp.hidden = true;
+  };
+  utterance.onend = () => {
+    finished = true;
+  };
   utterance.onerror = () => {
+    finished = true;
     playDefaultBeep();
-    els.soundHelp.hidden = false;
+    if (retry < 6) {
+      scheduleSpeechRetry(phrase, preset, 900 + retry * 350, retry + 1);
+    } else {
+      els.soundHelp.hidden = false;
+    }
   };
   try {
     window.speechSynthesis.cancel();
     window.speechSynthesis.resume?.();
-    playDefaultBeep();
     window.setTimeout(() => {
-      window.speechSynthesis.speak(utterance);
-    }, 140);
+      if (speechEventId && speechEventId !== activeAlarmSoundEventId) return;
+      try {
+        window.speechSynthesis.speak(utterance);
+        window.setTimeout(() => {
+          if (!started && !finished && retry < 6) scheduleSpeechRetry(phrase, preset, 850, retry + 1);
+        }, 1200);
+      } catch {
+        playDefaultBeep();
+        if (retry < 6) scheduleSpeechRetry(phrase, preset, 900, retry + 1);
+      }
+    }, voices.length ? 120 : 420);
+    return true;
   } catch {
     playDefaultBeep();
-    return;
+    if (retry < 6) scheduleSpeechRetry(phrase, preset, 900, retry + 1);
+    return false;
   }
+}
+
+function selectSpeechVoice(voices, preset) {
+  return (
+    voices.find((voice) => voice.voiceURI === preset?.voiceURI) ||
+    voices.find((voice) => voice.lang.toLowerCase() === "ko-kr") ||
+    voices.find((voice) => voice.lang.toLowerCase().startsWith("ko")) ||
+    voices[0]
+  );
+}
+
+function scheduleSpeechRetry(text, preset, delay, retry) {
+  if (!activeAlarmSoundEventId && !state.activeAlarmEventId) return;
+  window.clearTimeout(alarmSpeechRetryTimer);
+  alarmSpeechRetryTimer = window.setTimeout(() => {
+    if (!activeAlarmSoundEventId && !state.activeAlarmEventId) return;
+    speakText(text, preset, true, { retry });
+  }, delay);
+}
+
+function prepareSpeechVoices() {
+  if (!window.speechSynthesis) return;
+  window.speechSynthesis.getVoices();
+  if (speechVoicesPrepared) return;
+  speechVoicesPrepared = true;
+  window.speechSynthesis.addEventListener?.("voiceschanged", () => {
+    const activeEvent = db.alarmEventLogs.find((log) => log.id === state.activeAlarmEventId);
+    if (activeEvent?.status === "triggered") speakAlarm(getAlarmDisplayFromEvent(activeEvent), true);
+  });
 }
 
 function primeSpeechSynthesis() {
@@ -2989,6 +3055,7 @@ document.addEventListener("visibilitychange", () => {
 });
 
 render();
+prepareSpeechVoices();
 checkAlarms();
 initRemoteSync();
 setupAutomaticAudioUnlock();
