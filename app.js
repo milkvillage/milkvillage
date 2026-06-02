@@ -10,6 +10,7 @@ const LOG_RETENTION_DAYS = {
   prepBatches: 90,
   operationRecords: 180,
 };
+const ALARM_HISTORY_LIMIT = 8;
 const supabaseClient =
   window.supabase && SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY
     ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
@@ -202,7 +203,7 @@ function normalizeDb(nextDb) {
   const fallback = seedDb();
   return {
     meta: { ...fallback.meta, ...(nextDb?.meta || {}), updatedAt: nextDb?.meta?.updatedAt || nextDb?.updatedAt || fallback.meta.updatedAt },
-    settings: { ...fallback.settings, ...(nextDb?.settings || {}) },
+    settings: normalizeSettings(nextDb?.settings, fallback.settings),
     supplies: Array.isArray(nextDb?.supplies) ? nextDb.supplies.map(normalizeSupply) : fallback.supplies,
     recipes: Array.isArray(nextDb?.recipes) ? nextDb.recipes.map(normalizeRecipe) : fallback.recipes,
     recipeVariants: Array.isArray(nextDb?.recipeVariants) ? nextDb.recipeVariants : fallback.recipeVariants,
@@ -216,6 +217,19 @@ function normalizeDb(nextDb) {
     alarmEventLogs: Array.isArray(nextDb?.alarmEventLogs) ? nextDb.alarmEventLogs : fallback.alarmEventLogs,
     operations: normalizeOperations(nextDb?.operations, fallback.operations),
   };
+}
+
+function normalizeSettings(settings, fallbackSettings) {
+  return {
+    ...fallbackSettings,
+    ...(settings || {}),
+    alarmTitleHistory: normalizeTextHistory(settings?.alarmTitleHistory || fallbackSettings?.alarmTitleHistory),
+    alarmMessageHistory: normalizeTextHistory(settings?.alarmMessageHistory || fallbackSettings?.alarmMessageHistory),
+  };
+}
+
+function normalizeTextHistory(values) {
+  return uniqueTextValues(Array.isArray(values) ? values : [], ALARM_HISTORY_LIMIT);
 }
 
 function normalizeOperations(operations, fallbackOperations) {
@@ -572,6 +586,8 @@ function seedDb() {
     settings: {
       adminPin: "1234",
       defaultSoundId: "sound_default",
+      alarmTitleHistory: [],
+      alarmMessageHistory: [],
     },
     supplies,
     recipes,
@@ -667,6 +683,47 @@ function getAlarmListTitle(alarm) {
 
 function isScheduledAlarmEnabled(alarm) {
   return Boolean(alarm?.isActive && !alarm?.isDraft);
+}
+
+function uniqueTextValues(values, limit = ALARM_HISTORY_LIMIT) {
+  const seen = new Set();
+  return values
+    .map((value) => String(value || "").trim())
+    .filter((value) => {
+      const key = value.toLocaleLowerCase("ko-KR");
+      if (!value || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit);
+}
+
+function rememberAlarmText(title, message) {
+  db.settings.alarmTitleHistory = uniqueTextValues([title, ...(db.settings.alarmTitleHistory || [])]);
+  db.settings.alarmMessageHistory = uniqueTextValues([message, ...(db.settings.alarmMessageHistory || [])]);
+}
+
+function getAlarmTitleChoices() {
+  return uniqueTextValues([
+    ...(db.settings.alarmTitleHistory || []),
+    ...db.alarms.map(getAlarmTitleInputValue),
+  ]);
+}
+
+function getAlarmMessageChoices() {
+  return uniqueTextValues([
+    ...(db.settings.alarmMessageHistory || []),
+    ...db.alarms.map(getAlarmMessageInputValue),
+  ]);
+}
+
+function renderAlarmQuickChoices(values, datasetName) {
+  if (!values.length) return "";
+  return `
+    <div class="quick-choice-row">
+      ${values.map((value) => `<button class="quick-choice-button" type="button" data-${datasetName}="${escapeAttr(value)}">${escapeHtml(value)}</button>`).join("")}
+    </div>
+  `;
 }
 
 function makeDefaultOperations(createdAt = nowIso()) {
@@ -2127,6 +2184,8 @@ function renderAlarmsAdmin(container) {
   state.selectedAlarmId = alarm?.id || null;
   const alarmTitleValue = getAlarmTitleInputValue(alarm);
   const alarmMessageValue = getAlarmMessageInputValue(alarm);
+  const alarmTitleChoices = getAlarmTitleChoices();
+  const alarmMessageChoices = getAlarmMessageChoices();
   container.innerHTML = `
     <div class="alarm-admin-panel">
       <section class="alarm-list-panel">
@@ -2162,7 +2221,11 @@ function renderAlarmsAdmin(container) {
             <div class="alarm-form-grid">
               <label class="field">
                 <span>알림 이름</span>
-                <input id="alarmTitleInput" value="${escapeAttr(alarmTitleValue)}" placeholder="예: 소모품 확인" />
+                <input id="alarmTitleInput" list="alarmTitleSuggestions" value="${escapeAttr(alarmTitleValue)}" placeholder="예: 소모품 확인" />
+                <datalist id="alarmTitleSuggestions">
+                  ${alarmTitleChoices.map((value) => `<option value="${escapeAttr(value)}"></option>`).join("")}
+                </datalist>
+                ${renderAlarmQuickChoices(alarmTitleChoices, "fill-alarm-title")}
               </label>
               <label class="field">
                 <span>알림 시간</span>
@@ -2172,6 +2235,7 @@ function renderAlarmsAdmin(container) {
             <label class="field alarm-message-field">
               <span>음성으로 읽을 문구</span>
               <textarea id="alarmSpokenMessageInput" placeholder="예: 소모품 확인하고 부족한 품목을 채워주세요.">${escapeHtml(alarmMessageValue)}</textarea>
+              ${renderAlarmQuickChoices(alarmMessageChoices, "fill-alarm-message")}
             </label>
             <div class="alarm-action-row">
               <button class="button button--primary" id="saveAlarm" type="button">저장</button>
@@ -2199,6 +2263,20 @@ function renderAlarmsAdmin(container) {
     state.selectedAlarmId = alarm.id;
     state.savedMessage = "내용을 입력한 뒤 저장하면 알림이 작동합니다.";
     renderAdminScreen();
+  });
+  container.querySelectorAll("[data-fill-alarm-title]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const input = container.querySelector("#alarmTitleInput");
+      input.value = button.dataset.fillAlarmTitle || "";
+      input.focus();
+    });
+  });
+  container.querySelectorAll("[data-fill-alarm-message]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const input = container.querySelector("#alarmSpokenMessageInput");
+      input.value = button.dataset.fillAlarmMessage || "";
+      input.focus();
+    });
   });
   container.querySelector("#deleteAlarm")?.addEventListener("click", () => {
     if (!alarm) return;
@@ -2252,6 +2330,7 @@ function applySimpleAlarmForm(container, alarm, { activate = false } = {}) {
   if (activate) {
     alarm.isDraft = false;
     alarm.isActive = true;
+    rememberAlarmText(alarm.title, alarm.spokenMessage);
   }
   alarm.requiresAcknowledgement = true;
   alarm.updatedAt = nowIso();
