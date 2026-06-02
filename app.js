@@ -22,10 +22,8 @@ let remoteChannel = null;
 let remotePollTimer = null;
 let lastRemoteUpdatedAt = "";
 let localRevisionAt = "";
-let audioContext = null;
 let pendingSpeech = null;
-let alarmToneTimer = null;
-let alarmSpeechTimer = null;
+let alarmSpeechLoopTimer = null;
 let alarmSpeechRetryTimer = null;
 let activeAlarmSoundEventId = "";
 let wakeLock = null;
@@ -2671,7 +2669,7 @@ function triggerAlarm(alarm, source = "schedule", scheduledAt = "") {
 function showAlarmModal(alarm) {
   els.alarmTitle.textContent = alarm.title;
   els.alarmMessage.textContent = alarm.message;
-  els.soundHelp.hidden = state.audioUnlocked;
+  els.soundHelp.hidden = true;
   els.alarmModal.hidden = false;
   startAlarmSound(alarm);
 }
@@ -2796,8 +2794,6 @@ function getScheduledAlarmDate(alarm, date = new Date()) {
 
 function unlockAudio({ announce = true } = {}) {
   state.audioUnlocked = true;
-  ensureAudioReady();
-  primeAlarmAudio();
   prepareSpeechVoices();
   requestWakeLock();
   const queuedSpeech = pendingSpeech;
@@ -2806,7 +2802,7 @@ function unlockAudio({ announce = true } = {}) {
   if (activeEvent?.status === "triggered") {
     startAlarmSound(getAlarmDisplayFromEvent(activeEvent), { forceRestart: true });
   } else if (queuedSpeech) {
-    speakText(queuedSpeech.text, queuedSpeech.preset, true);
+    speakText(queuedSpeech.text, queuedSpeech.preset, true, { repeat: queuedSpeech.repeat, eventId: queuedSpeech.eventId });
   } else if (announce) {
     speakText("음성 알림이 준비되었습니다.", getVoicePreset(db.settings.defaultSoundId), true);
   } else {
@@ -2827,30 +2823,18 @@ function setupAutomaticAudioUnlock() {
 
 function startAlarmSound(alarm, { forceRestart = false } = {}) {
   const soundEventId = state.activeAlarmEventId || `${alarm?.id || "alarm"}:${alarm?.time || ""}`;
-  if (!forceRestart && activeAlarmSoundEventId === soundEventId && alarmToneTimer) return;
+  if (!forceRestart && activeAlarmSoundEventId === soundEventId) return;
   stopAlarmSound();
   activeAlarmSoundEventId = soundEventId;
-
-  const playTone = () => {
-    const played = playAlarmPulse();
-    if (!played) els.soundHelp.hidden = false;
-  };
-  const speak = () => speakAlarm(alarm, true);
-
-  playTone();
-  window.setTimeout(playTone, 520);
-  alarmToneTimer = window.setInterval(playTone, 1600);
-  speak();
-  window.setTimeout(speak, 2600);
-  alarmSpeechTimer = window.setInterval(speak, 18000);
+  state.audioUnlocked = true;
+  requestWakeLock();
+  speakAlarm(alarm, true, { repeat: true, eventId: soundEventId });
 }
 
 function stopAlarmSound() {
-  window.clearInterval(alarmToneTimer);
-  window.clearInterval(alarmSpeechTimer);
+  window.clearTimeout(alarmSpeechLoopTimer);
   window.clearTimeout(alarmSpeechRetryTimer);
-  alarmToneTimer = null;
-  alarmSpeechTimer = null;
+  alarmSpeechLoopTimer = null;
   alarmSpeechRetryTimer = null;
   activeAlarmSoundEventId = "";
   pendingSpeech = null;
@@ -2877,36 +2861,38 @@ function getVoicePreset(soundId) {
   return db.alarmSounds.find((item) => item.id === soundId) || db.alarmSounds.find((item) => item.isDefault) || normalizeVoicePreset({});
 }
 
-function speakAlarm(alarm, allowWhileLocked = false) {
+function speakAlarm(alarm, allowWhileLocked = false, options = {}) {
   const preset = getVoicePreset(alarm.soundId || db.settings.defaultSoundId);
-  speakText(alarm.spokenMessage || alarm.message || alarm.title, preset, allowWhileLocked);
+  speakText(alarm.spokenMessage || alarm.message || alarm.title, preset, allowWhileLocked, options);
 }
 
-function speakText(text, preset, allowWhileLocked = false, { retry = 0 } = {}) {
+function speakText(text, preset, allowWhileLocked = false, { retry = 0, repeat = false, eventId = "" } = {}) {
   const phrase = String(text || "").trim();
   if (!phrase) return false;
   if (allowWhileLocked) state.audioUnlocked = true;
   if (!state.audioUnlocked) {
-    pendingSpeech = { text: phrase, preset };
-    els.soundHelp.hidden = false;
+    pendingSpeech = { text: phrase, preset, repeat, eventId };
     return false;
   }
   els.soundHelp.hidden = true;
-  ensureAudioReady();
   if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) {
-    playDefaultBeep();
-    els.soundHelp.hidden = false;
+    scheduleSpeechRetry(phrase, preset, 1000, retry + 1, { repeat, eventId });
     return false;
   }
   const voices = getSpeechVoices();
-  if (!voices.length && retry < 8) {
-    scheduleSpeechRetry(phrase, preset, 500 + retry * 250, retry + 1);
-  }
   const utterance = new window.SpeechSynthesisUtterance(phrase);
   const selectedVoice = selectSpeechVoice(voices, preset);
-  const speechEventId = activeAlarmSoundEventId;
+  const speechEventId = eventId || activeAlarmSoundEventId;
   let started = false;
   let finished = false;
+  const isCurrentAlarmSpeech = () => !speechEventId || speechEventId === activeAlarmSoundEventId;
+  const scheduleNextSpeech = (delay) => {
+    if (!repeat || !isCurrentAlarmSpeech()) return;
+    window.clearTimeout(alarmSpeechLoopTimer);
+    alarmSpeechLoopTimer = window.setTimeout(() => {
+      speakText(phrase, preset, true, { repeat: true, eventId: speechEventId });
+    }, delay);
+  };
   if (selectedVoice) utterance.voice = selectedVoice;
   utterance.lang = selectedVoice?.lang || preset?.lang || "ko-KR";
   utterance.rate = Number(preset?.rate || 0.92);
@@ -2918,37 +2904,46 @@ function speakText(text, preset, allowWhileLocked = false, { retry = 0 } = {}) {
   };
   utterance.onend = () => {
     finished = true;
+    scheduleNextSpeech(900);
   };
   utterance.onerror = () => {
     finished = true;
-    playDefaultBeep();
-    if (retry < 6) {
-      scheduleSpeechRetry(phrase, preset, 900 + retry * 350, retry + 1);
-    } else {
-      els.soundHelp.hidden = false;
-    }
+    scheduleSpeechRetry(phrase, preset, 500, retry + 1, { repeat, eventId: speechEventId });
   };
   try {
     window.speechSynthesis.cancel();
     window.speechSynthesis.resume?.();
     window.setTimeout(() => {
-      if (speechEventId && speechEventId !== activeAlarmSoundEventId) return;
+      if (!isCurrentAlarmSpeech()) return;
       try {
         window.speechSynthesis.speak(utterance);
+        window.clearTimeout(alarmSpeechRetryTimer);
+        alarmSpeechRetryTimer = window.setTimeout(() => {
+          if (!finished && isCurrentAlarmSpeech()) {
+            try {
+              window.speechSynthesis.cancel();
+            } catch {
+              // Keep retrying speech below.
+            }
+            scheduleSpeechRetry(phrase, preset, 500, retry + 1, { repeat, eventId: speechEventId });
+          }
+        }, estimateSpeechWatchdogDelay(phrase));
         window.setTimeout(() => {
-          if (!started && !finished && retry < 6) scheduleSpeechRetry(phrase, preset, 850, retry + 1);
+          if (!started && !finished && isCurrentAlarmSpeech()) window.speechSynthesis.resume?.();
         }, 1200);
       } catch {
-        playDefaultBeep();
-        if (retry < 6) scheduleSpeechRetry(phrase, preset, 900, retry + 1);
+        scheduleSpeechRetry(phrase, preset, 500, retry + 1, { repeat, eventId: speechEventId });
       }
-    }, voices.length ? 120 : 420);
+    }, voices.length ? 80 : 350);
     return true;
   } catch {
-    playDefaultBeep();
-    if (retry < 6) scheduleSpeechRetry(phrase, preset, 900, retry + 1);
+    scheduleSpeechRetry(phrase, preset, 500, retry + 1, { repeat, eventId: speechEventId });
     return false;
   }
+}
+
+function estimateSpeechWatchdogDelay(text) {
+  return Math.min(90000, Math.max(15000, String(text || "").length * 700));
 }
 
 function selectSpeechVoice(voices, preset) {
@@ -2960,12 +2955,13 @@ function selectSpeechVoice(voices, preset) {
   );
 }
 
-function scheduleSpeechRetry(text, preset, delay, retry) {
-  if (!activeAlarmSoundEventId && !state.activeAlarmEventId) return;
+function scheduleSpeechRetry(text, preset, delay, retry, { repeat = false, eventId = "" } = {}) {
+  const speechEventId = eventId || activeAlarmSoundEventId;
+  if (repeat && speechEventId && speechEventId !== activeAlarmSoundEventId) return;
   window.clearTimeout(alarmSpeechRetryTimer);
   alarmSpeechRetryTimer = window.setTimeout(() => {
-    if (!activeAlarmSoundEventId && !state.activeAlarmEventId) return;
-    speakText(text, preset, true, { retry });
+    if (repeat && speechEventId && speechEventId !== activeAlarmSoundEventId) return;
+    speakText(text, preset, true, { retry, repeat, eventId: speechEventId });
   }, delay);
 }
 
@@ -2976,7 +2972,7 @@ function prepareSpeechVoices() {
   speechVoicesPrepared = true;
   window.speechSynthesis.addEventListener?.("voiceschanged", () => {
     const activeEvent = db.alarmEventLogs.find((log) => log.id === state.activeAlarmEventId);
-    if (activeEvent?.status === "triggered") speakAlarm(getAlarmDisplayFromEvent(activeEvent), true);
+    if (activeEvent?.status === "triggered") startAlarmSound(getAlarmDisplayFromEvent(activeEvent), { forceRestart: true });
   });
 }
 
@@ -2993,28 +2989,6 @@ function primeSpeechSynthesis() {
   }
 }
 
-function primeAlarmAudio() {
-  try {
-    const context = ensureAudioReady();
-    if (!context) return;
-    const oscillator = context.createOscillator();
-    const gain = context.createGain();
-    oscillator.type = "sine";
-    oscillator.frequency.value = 440;
-    gain.gain.value = 0.001;
-    oscillator.connect(gain);
-    gain.connect(context.destination);
-    oscillator.start();
-    oscillator.stop(context.currentTime + 0.03);
-    oscillator.onended = () => {
-      oscillator.disconnect();
-      gain.disconnect();
-    };
-  } catch {
-    // A silent unlock tone is best-effort only.
-  }
-}
-
 async function requestWakeLock() {
   if (!("wakeLock" in navigator) || wakeLock) return;
   try {
@@ -3025,80 +2999,6 @@ async function requestWakeLock() {
   } catch {
     // Wake lock is optional and depends on browser support.
   }
-}
-
-function ensureAudioReady() {
-  try {
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContext) return null;
-    if (!audioContext) audioContext = new AudioContext();
-    if (audioContext.state === "suspended") audioContext.resume?.();
-    return audioContext;
-  } catch {
-    return null;
-  }
-}
-
-function playDefaultBeep() {
-  try {
-    const context = ensureAudioReady();
-    if (!context) return;
-    const oscillator = context.createOscillator();
-    const gain = context.createGain();
-    oscillator.type = "sine";
-    oscillator.frequency.value = 880;
-    gain.gain.value = 0.08;
-    oscillator.connect(gain);
-    gain.connect(context.destination);
-    oscillator.start();
-    oscillator.stop(context.currentTime + 0.24);
-  } catch {
-    els.soundHelp.hidden = false;
-  }
-}
-
-function playAlarmPulse() {
-  try {
-    const context = ensureAudioReady();
-    if (!context) return false;
-    if (context.state === "suspended") {
-      context.resume?.().then(() => playAlarmPulse());
-      return false;
-    }
-
-    const now = context.currentTime;
-    [
-      [880, 0, 0.18],
-      [1175, 0.24, 0.2],
-      [880, 0.52, 0.24],
-    ].forEach(([frequency, offset, duration]) => {
-      playAlarmTone(context, frequency, now + offset, duration);
-    });
-    els.soundHelp.hidden = true;
-    return true;
-  } catch {
-    els.soundHelp.hidden = false;
-    return false;
-  }
-}
-
-function playAlarmTone(context, frequency, startAt, duration) {
-  const oscillator = context.createOscillator();
-  const gain = context.createGain();
-  oscillator.type = "sine";
-  oscillator.frequency.setValueAtTime(frequency, startAt);
-  gain.gain.setValueAtTime(0.001, startAt);
-  gain.gain.linearRampToValueAtTime(0.18, startAt + 0.025);
-  gain.gain.setValueAtTime(0.18, startAt + Math.max(0.03, duration - 0.05));
-  gain.gain.exponentialRampToValueAtTime(0.001, startAt + duration);
-  oscillator.connect(gain);
-  gain.connect(context.destination);
-  oscillator.start(startAt);
-  oscillator.stop(startAt + duration + 0.04);
-  oscillator.onended = () => {
-    oscillator.disconnect();
-    gain.disconnect();
-  };
 }
 
 function dayLabel(day) {
