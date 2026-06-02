@@ -876,6 +876,77 @@ th {
   margin-top: 16px;
 }
 
+.ops-admin-panel {
+  min-height: 100%;
+  display: grid;
+  grid-template-columns: minmax(260px, 0.42fr) minmax(320px, 1fr);
+}
+
+.ops-task-list-panel,
+.ops-task-editor-panel {
+  min-width: 0;
+  padding: 18px;
+}
+
+.ops-task-list-panel {
+  border-right: 1px solid var(--line);
+  overflow: auto;
+}
+
+.ops-admin-section + .ops-admin-section {
+  margin-top: 22px;
+}
+
+.ops-admin-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.ops-admin-section-heading h3 {
+  margin: 0;
+  font-size: 21px;
+}
+
+.ops-task-list-stack {
+  padding: 0;
+}
+
+.ops-task-button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.ops-task-button strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ops-task-button span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #e7edf0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.ops-task-button.is-inactive {
+  opacity: 0.62;
+}
+
+.ops-task-editor {
+  max-width: 760px;
+  display: grid;
+  gap: 14px;
+}
+
 .icon-button {
   width: 46px;
   height: 46px;
@@ -1432,6 +1503,7 @@ th {
   .handover-form,
   .alarm-admin-panel,
   .alarm-form-grid,
+  .ops-admin-panel,
   .manager-summary-grid,
   .summary-columns {
     grid-template-columns: 1fr;
@@ -1453,7 +1525,8 @@ th {
 
   .admin-menu,
   .admin-column,
-  .alarm-list-panel {
+  .alarm-list-panel,
+  .ops-task-list-panel {
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }

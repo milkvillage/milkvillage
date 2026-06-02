@@ -37,6 +37,7 @@ const state = {
   adminMenu: "summary",
   selectedRecipeId: null,
   selectedVariantId: null,
+  selectedChecklistTaskId: null,
   selectedAnalysisSupplyId: null,
   selectedAlarmId: null,
   analysisMode: "weekday",
@@ -262,7 +263,7 @@ function normalizeOperations(operations, fallbackOperations) {
   const fallback = fallbackOperations || makeDefaultOperations();
   return {
     checklistTasks: Array.isArray(operations?.checklistTasks)
-      ? operations.checklistTasks.map(normalizeChecklistTask)
+      ? operations.checklistTasks.map((task, index) => normalizeChecklistTask(task, index))
       : fallback.checklistTasks,
     checklistRecords: Array.isArray(operations?.checklistRecords)
       ? operations.checklistRecords.map(normalizeChecklistRecord)
@@ -438,6 +439,9 @@ function syncSelectedIds() {
   }
   if (!state.selectedAnalysisSupplyId || !db.supplies.some((supply) => supply.id === state.selectedAnalysisSupplyId)) {
     state.selectedAnalysisSupplyId = db.supplies[0]?.id || null;
+  }
+  if (!state.selectedChecklistTaskId || !getChecklistTask(state.selectedChecklistTaskId)) {
+    state.selectedChecklistTaskId = getChecklistTasksForAdmin()[0]?.id || null;
   }
 }
 
@@ -857,6 +861,20 @@ function getChecklistTasks(section) {
   return (db.operations?.checklistTasks || [])
     .filter((task) => task.section === section && task.isActive)
     .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || a.title.localeCompare(b.title, "ko"));
+}
+
+function getChecklistTasksForAdmin(section = "") {
+  return (db.operations?.checklistTasks || [])
+    .filter((task) => !section || task.section === section)
+    .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || a.title.localeCompare(b.title, "ko"));
+}
+
+function getChecklistTask(taskId) {
+  return (db.operations?.checklistTasks || []).find((task) => task.id === taskId);
+}
+
+function checklistSectionLabel(section) {
+  return section === "close" ? "마감" : "오픈";
 }
 
 function getChecklistRecord(date, taskId) {
@@ -1421,6 +1439,7 @@ function renderAdminScreen() {
 
   const menuLabels = [
     ["summary", "오늘 요약"],
+    ["operationChecks", "운영 체크 관리"],
     ["recipes", "레시피 관리"],
     ["supplies", "소모품/발주량 관리"],
     ["adjust", "입고/재고 조정"],
@@ -1464,6 +1483,7 @@ function renderAdminScreen() {
 
   const body = els.workArea.querySelector("#adminBody");
   if (state.adminMenu === "summary") renderManagerSummaryAdmin(body);
+  if (state.adminMenu === "operationChecks") renderOperationChecksAdmin(body);
   if (state.adminMenu === "recipes") renderRecipeAdmin(body);
   if (state.adminMenu === "supplies") renderSuppliesAdmin(body);
   if (state.adminMenu === "adjust") renderAdjustAdmin(body);
@@ -1627,6 +1647,232 @@ function renderManagerSummaryAdmin(container) {
       </section>
     </div>
   `;
+}
+
+function renderOperationChecksAdmin(container) {
+  const tasks = getChecklistTasksForAdmin();
+  if (!state.selectedChecklistTaskId || !getChecklistTask(state.selectedChecklistTaskId)) {
+    state.selectedChecklistTaskId = tasks[0]?.id || null;
+  }
+  const task = getChecklistTask(state.selectedChecklistTaskId);
+
+  container.innerHTML = `
+    <div class="ops-admin-panel">
+      <section class="ops-task-list-panel">
+        ${renderChecklistTaskAdminSection("open")}
+        ${renderChecklistTaskAdminSection("close")}
+      </section>
+      <section class="ops-task-editor-panel">
+        ${
+          task
+            ? `
+              <div class="ops-task-editor">
+                <div class="alarm-panel-heading">
+                  <h3>체크 항목 편집</h3>
+                  ${state.savedMessage ? `<span class="saved-note">${escapeHtml(state.savedMessage)}</span>` : ""}
+                </div>
+                <label class="field">
+                  <span>항목명</span>
+                  <input id="checkTaskTitle" type="text" value="${escapeAttr(task.title)}" placeholder="예: 냉장고 온도 확인" />
+                </label>
+                <div class="alarm-form-grid">
+                  <label class="field">
+                    <span>구분</span>
+                    <select id="checkTaskSection">
+                      <option value="open" ${task.section === "open" ? "selected" : ""}>오픈</option>
+                      <option value="close" ${task.section === "close" ? "selected" : ""}>마감</option>
+                    </select>
+                  </label>
+                  <label class="check-field">
+                    <input id="checkTaskActive" type="checkbox" ${task.isActive ? "checked" : ""} />
+                    직원 화면에 표시
+                  </label>
+                </div>
+                <div class="alarm-action-row">
+                  <button class="button button--danger" id="deleteCheckTask" type="button">삭제</button>
+                  <button class="button button--primary" id="saveCheckTask" type="button">저장</button>
+                </div>
+              </div>
+            `
+            : `<div class="empty-state">체크 항목이 없습니다.</div>`
+        }
+      </section>
+    </div>
+  `;
+
+  container.querySelectorAll("[data-select-check-task]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedChecklistTaskId = button.dataset.selectCheckTask;
+      state.savedMessage = "";
+      renderAdminScreen();
+    });
+  });
+  container.querySelectorAll("[data-add-check-task]").forEach((button) => {
+    button.addEventListener("click", () => addChecklistTask(button.dataset.addCheckTask));
+  });
+  setupChecklistTaskDragSorting(container);
+  container.querySelector("#saveCheckTask")?.addEventListener("click", () => saveChecklistTaskAdmin(container));
+  container.querySelector("#deleteCheckTask")?.addEventListener("click", deleteChecklistTask);
+}
+
+function renderChecklistTaskAdminSection(section) {
+  const tasks = getChecklistTasksForAdmin(section);
+  return `
+    <div class="ops-admin-section">
+      <div class="ops-admin-section-heading">
+        <h3>${checklistSectionLabel(section)} 체크</h3>
+        <button class="button button--ghost button--small" type="button" data-add-check-task="${section}">추가</button>
+      </div>
+      <div class="list-stack ops-task-list-stack" data-check-task-list="${section}">
+        ${
+          tasks.length
+            ? tasks
+                .map(
+                  (item) => `
+                    <button class="list-button list-button--draggable ops-task-button ${item.id === state.selectedChecklistTaskId ? "is-active" : ""} ${item.isActive ? "" : "is-inactive"}" type="button" draggable="true" data-select-check-task="${item.id}" data-check-task-drag="${item.id}" title="드래그해서 순서 변경">
+                      <strong>${escapeHtml(item.title)}</strong>
+                      <span>${item.isActive ? "표시" : "숨김"}</span>
+                    </button>
+                  `,
+                )
+                .join("")
+            : `<div class="empty-state">항목 없음</div>`
+        }
+      </div>
+    </div>
+  `;
+}
+
+function setupChecklistTaskDragSorting(container) {
+  let draggedTaskId = "";
+  container.querySelectorAll("[data-check-task-drag]").forEach((button) => {
+    button.addEventListener("dragstart", (event) => {
+      draggedTaskId = button.dataset.checkTaskDrag;
+      button.classList.add("is-dragging");
+      if (event.dataTransfer) {
+        const dragImage = document.createElement("canvas");
+        dragImage.width = 1;
+        dragImage.height = 1;
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", draggedTaskId);
+        event.dataTransfer.setDragImage(dragImage, 0, 0);
+      }
+    });
+    button.addEventListener("dragend", () => {
+      draggedTaskId = "";
+      clearChecklistTaskDropMarkers(container);
+    });
+    button.addEventListener("dragover", (event) => {
+      if (!draggedTaskId || draggedTaskId === button.dataset.checkTaskDrag) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+      const position = getVerticalDropPosition(event, button);
+      clearChecklistTaskDropMarkers(container);
+      button.classList.add(position === "after" ? "is-drop-after" : "is-drop-before");
+    });
+    button.addEventListener("dragleave", () => {
+      button.classList.remove("is-drop-before", "is-drop-after");
+    });
+    button.addEventListener("drop", (event) => {
+      event.preventDefault();
+      const sourceId = event.dataTransfer?.getData("text/plain") || draggedTaskId;
+      const position = getVerticalDropPosition(event, button);
+      clearChecklistTaskDropMarkers(container);
+      moveChecklistTask(sourceId, button.dataset.checkTaskDrag, position);
+    });
+  });
+}
+
+function getVerticalDropPosition(event, target) {
+  const rect = target.getBoundingClientRect();
+  return event.clientY > rect.top + rect.height / 2 ? "after" : "before";
+}
+
+function clearChecklistTaskDropMarkers(container) {
+  container.querySelectorAll(".is-dragging, .is-drop-before, .is-drop-after").forEach((item) => {
+    item.classList.remove("is-dragging", "is-drop-before", "is-drop-after");
+  });
+}
+
+function reorderChecklistSection(section, orderedTasks = getChecklistTasksForAdmin(section)) {
+  const updatedAt = nowIso();
+  orderedTasks.forEach((task, index) => {
+    task.section = section;
+    task.sortOrder = index + 1;
+    task.updatedAt = updatedAt;
+  });
+}
+
+function moveChecklistTask(sourceTaskId, targetTaskId, position = "before") {
+  if (!sourceTaskId || !targetTaskId || sourceTaskId === targetTaskId) return;
+  const sourceTask = getChecklistTask(sourceTaskId);
+  const targetTask = getChecklistTask(targetTaskId);
+  if (!sourceTask || !targetTask) return;
+
+  const originalSection = sourceTask.section;
+  const targetSection = targetTask.section;
+  sourceTask.section = targetSection;
+  const orderedTargetTasks = getChecklistTasksForAdmin(targetSection).filter((task) => task.id !== sourceTaskId);
+  const targetIndex = orderedTargetTasks.findIndex((task) => task.id === targetTaskId);
+  if (targetIndex < 0) return;
+
+  orderedTargetTasks.splice(position === "after" ? targetIndex + 1 : targetIndex, 0, sourceTask);
+  reorderChecklistSection(targetSection, orderedTargetTasks);
+  if (originalSection !== targetSection) reorderChecklistSection(originalSection);
+  state.selectedChecklistTaskId = sourceTask.id;
+  state.savedMessage = "체크 순서를 저장했습니다.";
+  saveDb();
+  renderAdminScreen();
+}
+
+function addChecklistTask(section = "open") {
+  const targetSection = section === "close" ? "close" : "open";
+  const createdAt = nowIso();
+  const task = makeChecklistTask(uid("check_task"), targetSection, "새 체크 항목", getChecklistTasksForAdmin(targetSection).length + 1, createdAt);
+  db.operations.checklistTasks.push(task);
+  state.selectedChecklistTaskId = task.id;
+  state.savedMessage = "항목이 추가되었습니다.";
+  saveDb();
+  renderAdminScreen();
+}
+
+function saveChecklistTaskAdmin(container) {
+  const task = getChecklistTask(state.selectedChecklistTaskId);
+  if (!task) return;
+  const titleInput = container.querySelector("#checkTaskTitle");
+  const title = titleInput.value.trim();
+  if (!title) {
+    titleInput.focus();
+    return;
+  }
+
+  const originalSection = task.section;
+  const nextSection = container.querySelector("#checkTaskSection")?.value === "close" ? "close" : "open";
+  task.title = title;
+  task.isActive = Boolean(container.querySelector("#checkTaskActive")?.checked);
+  task.section = nextSection;
+  task.updatedAt = nowIso();
+  if (originalSection !== nextSection) {
+    task.sortOrder = getChecklistTasksForAdmin(nextSection).filter((item) => item.id !== task.id).length + 1;
+    reorderChecklistSection(originalSection);
+    reorderChecklistSection(nextSection);
+  }
+  state.savedMessage = "저장 완료";
+  saveDb();
+  renderAdminScreen();
+}
+
+function deleteChecklistTask() {
+  const task = getChecklistTask(state.selectedChecklistTaskId);
+  if (!task) return;
+  const section = task.section;
+  db.operations.checklistTasks = db.operations.checklistTasks.filter((item) => item.id !== task.id);
+  db.operations.checklistRecords = db.operations.checklistRecords.filter((record) => record.taskId !== task.id);
+  reorderChecklistSection(section);
+  state.selectedChecklistTaskId = getChecklistTasksForAdmin(section)[0]?.id || getChecklistTasksForAdmin()[0]?.id || null;
+  state.savedMessage = `${task.title} 항목을 삭제했습니다.`;
+  saveDb();
+  renderAdminScreen();
 }
 
 function renderRecipeAdmin(container) {
