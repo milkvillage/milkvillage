@@ -272,7 +272,7 @@ h1 {
 .make-layout {
   min-height: calc(100vh - 128px);
   display: grid;
-  grid-template-columns: minmax(300px, 40%) minmax(360px, 60%);
+  grid-template-columns: minmax(520px, 68%) minmax(260px, 32%);
   gap: 18px;
 }
 
@@ -320,7 +320,7 @@ h1 {
 
 .recipe-tabs {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   padding: 18px 20px 0;
 }
@@ -353,7 +353,7 @@ h1 {
 
 .batch-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -1272,6 +1272,29 @@ th {
   margin-left: auto;
 }
 
+.staff-admin-card {
+  max-width: 760px;
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.staff-admin-list {
+  display: grid;
+  gap: 10px;
+}
+
+.staff-admin-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto;
+  gap: 10px;
+  align-items: end;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
 .checklist-list {
   display: grid;
   gap: 10px;
@@ -1357,6 +1380,140 @@ th {
 .handover-item.is-resolved p,
 .handover-item.is-resolved strong {
   color: var(--muted);
+}
+
+.attendance-screen {
+  min-height: calc(100vh - 128px);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.attendance-body {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.35fr) minmax(420px, 1fr);
+  gap: 16px;
+  padding: 18px;
+}
+
+.attendance-card {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.attendance-form-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.attendance-action-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+.attendance-current-status {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-weight: 900;
+}
+
+.attendance-current-status.is-present,
+.attendance-chip.is-present {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.attendance-current-status.is-absent,
+.attendance-chip.is-absent {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.attendance-calendar-card {
+  overflow: auto;
+}
+
+.attendance-calendar-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.attendance-calendar-heading h3 {
+  margin: 0;
+  text-align: center;
+  font-size: 22px;
+}
+
+.attendance-calendar {
+  min-width: 680px;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  border-top: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+}
+
+.attendance-weekday,
+.attendance-day {
+  min-width: 0;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.attendance-weekday {
+  padding: 10px 8px;
+  background: var(--surface-strong);
+  color: var(--muted);
+  text-align: center;
+  font-weight: 900;
+}
+
+.attendance-day {
+  min-height: 116px;
+  padding: 8px;
+  background: var(--surface);
+}
+
+.attendance-day.is-empty {
+  background: #f5f7f8;
+}
+
+.attendance-day.is-today {
+  box-shadow: inset 0 0 0 3px var(--teal-soft);
+}
+
+.attendance-day strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 15px;
+}
+
+.attendance-day-records {
+  display: grid;
+  gap: 5px;
+}
+
+.attendance-chip {
+  min-width: 0;
+  display: block;
+  padding: 4px 6px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 900;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .manager-summary-grid {
@@ -1668,6 +1825,7 @@ th {
 
   .ops-body,
   .ops-card--summary,
+  .attendance-body,
   .handover-form,
   .alarm-admin-panel,
   .alarm-form-grid,
@@ -1738,6 +1896,7 @@ th {
     .alarm-row,
     .analysis-summary,
     .checklist-item,
+    .staff-admin-row,
     .handover-item,
     .compact-list li {
     grid-template-columns: 1fr;

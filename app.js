@@ -76,6 +76,8 @@ const state = {
   selectedVariantId: null,
   selectedChecklistTaskId: null,
   selectedAnalysisSupplyId: null,
+  selectedAttendanceStaffId: null,
+  attendanceMonth: todayDateKey().slice(0, 7),
   selectedAlarmId: null,
   analysisMode: "weekday",
   operatorName: "",
@@ -313,6 +315,12 @@ function normalizeOperations(operations, fallbackOperations) {
     handoverNotes: Array.isArray(operations?.handoverNotes)
       ? operations.handoverNotes.map(normalizeHandoverNote)
       : fallback.handoverNotes,
+    staffMembers: Array.isArray(operations?.staffMembers)
+      ? operations.staffMembers.map((staff, index) => normalizeStaffMember(staff, index))
+      : fallback.staffMembers,
+    attendanceRecords: Array.isArray(operations?.attendanceRecords)
+      ? operations.attendanceRecords.map(normalizeAttendanceRecord)
+      : fallback.attendanceRecords,
   };
 }
 
@@ -352,6 +360,32 @@ function normalizeHandoverNote(note) {
     resolvedBy: note?.resolvedBy || "",
     createdAt: note?.createdAt || nowIso(),
     updatedAt: note?.updatedAt || note?.createdAt || nowIso(),
+  };
+}
+
+function normalizeStaffMember(staff, index = 0) {
+  return {
+    id: staff?.id || uid("staff"),
+    name: staff?.name || "근무자",
+    isActive: staff?.isActive !== false,
+    sortOrder: Number.isFinite(Number(staff?.sortOrder)) ? Number(staff.sortOrder) : index + 1,
+    createdAt: staff?.createdAt || nowIso(),
+    updatedAt: staff?.updatedAt || staff?.createdAt || nowIso(),
+  };
+}
+
+function normalizeAttendanceRecord(record) {
+  const status = record?.status === "absent" ? "absent" : "present";
+  return {
+    id: record?.id || uid("attendance"),
+    date: record?.date || todayDateKey(),
+    staffId: record?.staffId || "",
+    staffName: record?.staffName || "",
+    status,
+    employeeSignature: record?.employeeSignature || "",
+    managerSignature: record?.managerSignature || "",
+    recordedAt: record?.recordedAt || record?.updatedAt || nowIso(),
+    updatedAt: record?.updatedAt || record?.recordedAt || nowIso(),
   };
 }
 
@@ -525,6 +559,9 @@ function syncSelectedIds() {
   }
   if (!state.selectedAnalysisSupplyId || !db.supplies.some((supply) => supply.id === state.selectedAnalysisSupplyId)) {
     state.selectedAnalysisSupplyId = getSuppliesForAdmin()[0]?.id || null;
+  }
+  if (state.selectedAttendanceStaffId && !getActiveStaffMembers().some((staff) => staff.id === state.selectedAttendanceStaffId)) {
+    state.selectedAttendanceStaffId = null;
   }
   if (!state.selectedChecklistTaskId || !getChecklistTask(state.selectedChecklistTaskId)) {
     state.selectedChecklistTaskId = getChecklistTasksForAdmin()[0]?.id || null;
@@ -974,6 +1011,8 @@ function makeDefaultOperations(createdAt = nowIso()) {
     checklistTasks,
     checklistRecords: [],
     handoverNotes: [],
+    staffMembers: [],
+    attendanceRecords: [],
   };
 }
 
@@ -1020,6 +1059,28 @@ function getSupply(supplyId) {
 
 function getSuppliesForAdmin() {
   return [...db.supplies].sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
+}
+
+function getStaffMembersForAdmin() {
+  return [...(db.operations?.staffMembers || [])].sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
+}
+
+function getActiveStaffMembers() {
+  return getStaffMembersForAdmin().filter((staff) => staff.isActive);
+}
+
+function getStaffMember(staffId) {
+  return (db.operations?.staffMembers || []).find((staff) => staff.id === staffId);
+}
+
+function getAttendanceRecordsForMonth(monthKey = state.attendanceMonth) {
+  return (db.operations?.attendanceRecords || [])
+    .filter((record) => String(record.date || "").startsWith(monthKey))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.staffName.localeCompare(b.staffName, "ko-KR"));
+}
+
+function getAttendanceRecord(date, staffId) {
+  return (db.operations?.attendanceRecords || []).find((record) => record.date === date && record.staffId === staffId);
 }
 
 function getVariantsForRecipe(recipeId, activeOnly = true) {
@@ -1147,9 +1208,10 @@ function renderSoundStatus() {
 
 function render() {
   const titleMap = {
-    make: "재료 만들기",
-    orders: "발주",
-    ops: "운영 체크",
+    make: "재료 만들기(입력필수)",
+    orders: "발주(확인사항)",
+    ops: "운영 체크(입력필수)",
+    attendance: "근퇴기록(입력필수)",
     admin: "관리자",
   };
   els.screenTitle.textContent = titleMap[state.screen];
@@ -1159,6 +1221,7 @@ function render() {
   if (state.screen === "make") renderMakeScreen();
   if (state.screen === "orders") renderOrderScreen();
   if (state.screen === "ops") renderOpsScreen();
+  if (state.screen === "attendance") renderAttendanceScreen();
   if (state.screen === "admin") renderAdminScreen();
 }
 
@@ -1404,7 +1467,7 @@ function renderOrderScreen() {
                     <th>품목명</th>
                     <th>현재 재고(g)</th>
                     <th>발주알림 기준량</th>
-                    <th>1ea 용량</th>
+                    <th>주문 단위 용량</th>
                     <th>추천 발주량(ea)</th>
                     <th>최근 사용</th>
                   </tr>
@@ -1441,6 +1504,10 @@ function renderOpsScreen() {
   const stats = getChecklistStats(today);
   const openNotes = getHandoverNotes({ openOnly: true });
   const recentNotes = getHandoverNotes().slice(0, 8);
+  const staffMembers = getActiveStaffMembers();
+  if (state.operatorName && !staffMembers.some((staff) => staff.name === state.operatorName)) {
+    state.operatorName = "";
+  }
 
   els.workArea.innerHTML = `
     <section class="ops-screen" aria-label="운영 체크">
@@ -1463,8 +1530,13 @@ function renderOpsScreen() {
             <span>인수인계 ${openNotes.length}</span>
           </div>
           <label class="field operator-field">
-            <span>근무자 이름</span>
-            <input id="operatorName" type="text" value="${escapeAttr(state.operatorName)}" placeholder="이름 입력" />
+            <span>근무자 선택</span>
+            <select id="operatorName" ${staffMembers.length ? "" : "disabled"}>
+              <option value="">이름 선택</option>
+              ${staffMembers
+                .map((staff) => `<option value="${escapeAttr(staff.name)}" ${staff.name === state.operatorName ? "selected" : ""}>${escapeHtml(staff.name)}</option>`)
+                .join("")}
+            </select>
           </label>
         </section>
 
@@ -1522,20 +1594,218 @@ function renderOpsScreen() {
   `;
 
   const operatorInput = els.workArea.querySelector("#operatorName");
-  operatorInput.addEventListener("input", () => {
-    state.operatorName = operatorInput.value;
+  const getSelectedOperator = () => operatorInput.value.trim();
+  operatorInput.addEventListener("change", () => {
+    state.operatorName = getSelectedOperator();
   });
   els.workArea.querySelectorAll("[data-check-task]").forEach((input) => {
     input.addEventListener("change", () => {
-      updateChecklistRecord(input.dataset.checkTask, input.checked, operatorInput.value.trim() || "직원");
+      const operatorName = getSelectedOperator();
+      if (!operatorName) {
+        input.checked = false;
+        alert("근무자 이름을 먼저 선택해주세요.");
+        return;
+      }
+      updateChecklistRecord(input.dataset.checkTask, input.checked, operatorName);
     });
   });
   els.workArea.querySelector("#addHandoverNote").addEventListener("click", () => {
-    addHandoverNote(els.workArea, operatorInput.value.trim() || "직원");
+    const operatorName = getSelectedOperator();
+    if (!operatorName) {
+      alert("근무자 이름을 먼저 선택해주세요.");
+      return;
+    }
+    addHandoverNote(els.workArea, operatorName);
   });
   els.workArea.querySelectorAll("[data-resolve-note]").forEach((button) => {
-    button.addEventListener("click", () => resolveHandoverNote(button.dataset.resolveNote, operatorInput.value.trim() || "직원"));
+    button.addEventListener("click", () => {
+      const operatorName = getSelectedOperator();
+      if (!operatorName) {
+        alert("근무자 이름을 먼저 선택해주세요.");
+        return;
+      }
+      resolveHandoverNote(button.dataset.resolveNote, operatorName);
+    });
   });
+}
+
+function renderAttendanceScreen() {
+  const staffMembers = getActiveStaffMembers();
+  const selectedStaff = staffMembers.find((staff) => staff.id === state.selectedAttendanceStaffId) || null;
+  const today = todayDateKey();
+  const todayRecord = selectedStaff ? getAttendanceRecord(today, selectedStaff.id) : null;
+
+  els.workArea.innerHTML = `
+    <section class="attendance-screen" aria-label="근퇴기록">
+      <div class="panel-header">
+        <h2>근퇴기록</h2>
+        <p>근무자가 이름을 선택하고 출근 또는 결근을 기록합니다.</p>
+      </div>
+      <div class="attendance-body">
+        <section class="attendance-card">
+          <div class="attendance-form-grid">
+            <label class="field">
+              <span>근무자 이름</span>
+              <select id="attendanceStaff" ${staffMembers.length ? "" : "disabled"}>
+                <option value="">이름 선택</option>
+                ${staffMembers
+                  .map(
+                    (staff) => `
+                      <option value="${escapeAttr(staff.id)}" ${staff.id === selectedStaff?.id ? "selected" : ""}>${escapeHtml(staff.name)}</option>
+                    `,
+                  )
+                  .join("")}
+              </select>
+            </label>
+            <label class="field">
+              <span>근무자 서명</span>
+              <input id="employeeSignature" type="text" value="${escapeAttr(todayRecord?.employeeSignature || selectedStaff?.name || "")}" placeholder="근무자 서명" />
+            </label>
+            <label class="field">
+              <span>매니저 서명</span>
+              <input id="managerSignature" type="text" value="${escapeAttr(todayRecord?.managerSignature || "")}" placeholder="매니저 서명" />
+            </label>
+          </div>
+          <div class="attendance-action-row">
+            <button class="button button--primary" type="button" data-attendance-status="present" ${selectedStaff ? "" : "disabled"}>출근</button>
+            <button class="button button--danger" type="button" data-attendance-status="absent" ${selectedStaff ? "" : "disabled"}>결근</button>
+            ${
+              todayRecord
+                ? `<span class="attendance-current-status ${todayRecord.status === "present" ? "is-present" : "is-absent"}">${attendanceStatusLabel(todayRecord.status)} 기록됨</span>`
+                : `<span class="muted">오늘 기록 없음</span>`
+            }
+          </div>
+          ${staffMembers.length ? "" : `<div class="empty-state">관리자 화면에서 근무자 이름을 먼저 등록해주세요.</div>`}
+        </section>
+        <section class="attendance-card attendance-calendar-card">
+          <div class="attendance-calendar-heading">
+            <button class="button button--ghost button--small" type="button" id="attendancePrevMonth">이전</button>
+            <h3>${formatAttendanceMonth(state.attendanceMonth)}</h3>
+            <button class="button button--ghost button--small" type="button" id="attendanceNextMonth">다음</button>
+          </div>
+          ${renderAttendanceCalendar(state.attendanceMonth)}
+        </section>
+      </div>
+    </section>
+  `;
+
+  const staffSelect = els.workArea.querySelector("#attendanceStaff");
+  staffSelect?.addEventListener("change", () => {
+    state.selectedAttendanceStaffId = staffSelect.value || null;
+    renderAttendanceScreen();
+  });
+  els.workArea.querySelectorAll("[data-attendance-status]").forEach((button) => {
+    button.addEventListener("click", () => saveAttendanceRecord(button.dataset.attendanceStatus, els.workArea));
+  });
+  els.workArea.querySelector("#attendancePrevMonth")?.addEventListener("click", () => {
+    state.attendanceMonth = shiftMonthKey(state.attendanceMonth, -1);
+    renderAttendanceScreen();
+  });
+  els.workArea.querySelector("#attendanceNextMonth")?.addEventListener("click", () => {
+    state.attendanceMonth = shiftMonthKey(state.attendanceMonth, 1);
+    renderAttendanceScreen();
+  });
+}
+
+function saveAttendanceRecord(status, container) {
+  const staff = getStaffMember(state.selectedAttendanceStaffId);
+  if (!staff) {
+    alert("근무자 이름을 먼저 선택해주세요.");
+    return;
+  }
+  const employeeSignatureInput = container.querySelector("#employeeSignature");
+  const employeeSignature = employeeSignatureInput.value.trim();
+  if (!employeeSignature) {
+    employeeSignatureInput.focus();
+    return;
+  }
+
+  const today = todayDateKey();
+  const updatedAt = nowIso();
+  let record = getAttendanceRecord(today, staff.id);
+  if (!record) {
+    record = {
+      id: uid("attendance"),
+      date: today,
+      staffId: staff.id,
+      staffName: staff.name,
+      status: "present",
+      employeeSignature: "",
+      managerSignature: "",
+      recordedAt: updatedAt,
+      updatedAt,
+    };
+    db.operations.attendanceRecords.push(record);
+  }
+  record.staffName = staff.name;
+  record.status = status === "absent" ? "absent" : "present";
+  record.employeeSignature = employeeSignature;
+  record.managerSignature = container.querySelector("#managerSignature")?.value.trim() || "";
+  record.recordedAt = record.recordedAt || updatedAt;
+  record.updatedAt = updatedAt;
+  saveDb();
+  renderAttendanceScreen();
+}
+
+function renderAttendanceCalendar(monthKey) {
+  const [year, month] = monthKey.split("-").map(Number);
+  const firstDay = new Date(year, month - 1, 1);
+  const lastDate = new Date(year, month, 0).getDate();
+  const leadingBlanks = firstDay.getDay();
+  const recordsByDate = new Map();
+  getAttendanceRecordsForMonth(monthKey).forEach((record) => {
+    if (!recordsByDate.has(record.date)) recordsByDate.set(record.date, []);
+    recordsByDate.get(record.date).push(record);
+  });
+  const cells = [];
+  for (let index = 0; index < leadingBlanks; index += 1) {
+    cells.push(`<div class="attendance-day is-empty" aria-hidden="true"></div>`);
+  }
+  for (let day = 1; day <= lastDate; day += 1) {
+    const date = `${monthKey}-${String(day).padStart(2, "0")}`;
+    const records = recordsByDate.get(date) || [];
+    cells.push(`
+      <div class="attendance-day ${date === todayDateKey() ? "is-today" : ""}">
+        <strong>${day}</strong>
+        <div class="attendance-day-records">
+          ${
+            records.length
+              ? records
+                  .map(
+                    (record) => `
+                      <span class="attendance-chip ${record.status === "present" ? "is-present" : "is-absent"}">
+                        ${escapeHtml(record.staffName)} ${attendanceStatusLabel(record.status)}
+                      </span>
+                    `,
+                  )
+                  .join("")
+              : ""
+          }
+        </div>
+      </div>
+    `);
+  }
+  return `
+    <div class="attendance-calendar">
+      ${["일", "월", "화", "수", "목", "금", "토"].map((day) => `<div class="attendance-weekday">${day}</div>`).join("")}
+      ${cells.join("")}
+    </div>
+  `;
+}
+
+function attendanceStatusLabel(status) {
+  return status === "absent" ? "결근" : "출근";
+}
+
+function formatAttendanceMonth(monthKey) {
+  const [year, month] = monthKey.split("-").map(Number);
+  return `${year}년 ${month}월`;
+}
+
+function shiftMonthKey(monthKey, offset) {
+  const [year, month] = monthKey.split("-").map(Number);
+  const date = new Date(year, month - 1 + offset, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
 function renderChecklistSection(sectionStat, date) {
@@ -1892,6 +2162,7 @@ function renderOperationChecksAdmin(container) {
             `
             : `<div class="empty-state">체크 항목이 없습니다.</div>`
         }
+        ${renderStaffMembersAdmin()}
       </section>
     </div>
   `;
@@ -1909,6 +2180,53 @@ function renderOperationChecksAdmin(container) {
   setupChecklistTaskDragSorting(container);
   container.querySelector("#saveCheckTask")?.addEventListener("click", () => saveChecklistTaskAdmin(container));
   container.querySelector("#deleteCheckTask")?.addEventListener("click", deleteChecklistTask);
+  container.querySelector("#addStaffMember")?.addEventListener("click", () => addStaffMember(container));
+  container.querySelector("#saveStaffMembers")?.addEventListener("click", () => saveStaffMembersAdmin(container));
+  container.querySelectorAll("[data-delete-staff]").forEach((button) => {
+    button.addEventListener("click", () => deleteStaffMember(container, button.dataset.deleteStaff));
+  });
+}
+
+function renderStaffMembersAdmin() {
+  const staffMembers = getStaffMembersForAdmin();
+  return `
+    <section class="staff-admin-card">
+      <div class="alarm-panel-heading">
+        <h3>근무자 이름 관리</h3>
+        <button class="button button--ghost button--small" id="addStaffMember" type="button">근무자 추가</button>
+      </div>
+      <div class="staff-admin-list">
+        ${
+          staffMembers.length
+            ? staffMembers
+                .map(
+                  (staff) => `
+                    <div class="staff-admin-row">
+                      <label class="field">
+                        <span>이름</span>
+                        <input data-staff-name="${staff.id}" type="text" value="${escapeAttr(staff.name)}" />
+                      </label>
+                      <label class="check-field">
+                        <input data-staff-active="${staff.id}" type="checkbox" ${staff.isActive ? "checked" : ""} />
+                        사용
+                      </label>
+                      <button class="icon-button" data-delete-staff="${staff.id}" type="button" aria-label="${escapeAttr(staff.name)} 삭제">
+                        <span class="icon" aria-hidden="true">
+                          <svg viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M6 7l1 14h10l1-14"/><path d="M9 7V4h6v3"/></svg>
+                        </span>
+                      </button>
+                    </div>
+                  `,
+                )
+                .join("")
+            : `<div class="empty-state">등록된 근무자가 없습니다.</div>`
+        }
+      </div>
+      <div class="button-row">
+        <button class="button button--primary" id="saveStaffMembers" type="button">근무자 저장</button>
+      </div>
+    </section>
+  `;
 }
 
 function renderChecklistTaskAdminSection(section) {
@@ -2067,6 +2385,59 @@ function deleteChecklistTask() {
   reorderChecklistSection(section);
   state.selectedChecklistTaskId = getChecklistTasksForAdmin(section)[0]?.id || getChecklistTasksForAdmin()[0]?.id || null;
   state.savedMessage = `${task.title} 항목을 삭제했습니다.`;
+  saveDb();
+  renderAdminScreen();
+}
+
+function applyStaffMembersAdminValues(container) {
+  const updatedAt = nowIso();
+  getStaffMembersForAdmin().forEach((staff) => {
+    const nameInput = container.querySelector(`[data-staff-name="${staff.id}"]`);
+    if (!nameInput) return;
+    staff.name = nameInput.value.trim() || staff.name;
+    staff.isActive = Boolean(container.querySelector(`[data-staff-active="${staff.id}"]`)?.checked);
+    staff.updatedAt = updatedAt;
+  });
+}
+
+function addStaffMember(container) {
+  applyStaffMembersAdminValues(container);
+  const createdAt = nowIso();
+  db.operations.staffMembers.push({
+    id: uid("staff"),
+    name: "새 근무자",
+    isActive: true,
+    sortOrder: getStaffMembersForAdmin().length + 1,
+    createdAt,
+    updatedAt: createdAt,
+  });
+  state.savedMessage = "근무자를 추가했습니다.";
+  saveDb();
+  renderAdminScreen();
+}
+
+function saveStaffMembersAdmin(container) {
+  applyStaffMembersAdminValues(container);
+  getStaffMembersForAdmin().forEach((staff, index) => {
+    staff.sortOrder = index + 1;
+  });
+  state.savedMessage = "근무자 저장 완료";
+  saveDb();
+  renderAdminScreen();
+}
+
+function deleteStaffMember(container, staffId) {
+  applyStaffMembersAdminValues(container);
+  const staff = getStaffMember(staffId);
+  if (!staff) return;
+  db.operations.staffMembers = getStaffMembersForAdmin().filter((item) => item.id !== staffId);
+  getStaffMembersForAdmin().forEach((item, index) => {
+    item.sortOrder = index + 1;
+    item.updatedAt = nowIso();
+  });
+  if (state.operatorName === staff.name) state.operatorName = "";
+  if (state.selectedAttendanceStaffId === staffId) state.selectedAttendanceStaffId = null;
+  state.savedMessage = `${staff.name} 근무자를 삭제했습니다.`;
   saveDb();
   renderAdminScreen();
 }
@@ -2525,7 +2896,7 @@ function renderSuppliesAdmin(container) {
               <th>단위</th>
               <th>현재 재고</th>
               <th>발주알림 기준량</th>
-              <th>1ea 용량</th>
+              <th>주문 단위 용량</th>
               <th>추천 발주량(ea)</th>
               <th>사용</th>
               <th></th>
@@ -2722,7 +3093,7 @@ function renderAdjustAdmin(container) {
           </select>
         </label>
         <label class="field">
-          <span>1ea 용량</span>
+          <span>주문 단위 용량</span>
           <input id="receiveUnitQty" type="number" min="0" value="${firstPackageQty}" />
         </label>
         <label class="field">
