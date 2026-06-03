@@ -116,7 +116,7 @@ if (pruneExpiredLogs()) {
 }
 state.selectedRecipeId = getActiveRecipes()[0]?.id || null;
 state.selectedVariantId = getVariantsForRecipe(state.selectedRecipeId)[0]?.id || null;
-state.selectedAnalysisSupplyId = db.supplies[0]?.id || null;
+state.selectedAnalysisSupplyId = getSuppliesForAdmin()[0]?.id || null;
 
 function uid(prefix) {
   const value = crypto?.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -268,7 +268,9 @@ function normalizeDb(nextDb) {
   return {
     meta: { ...fallback.meta, ...(nextDb?.meta || {}), updatedAt: nextDb?.meta?.updatedAt || nextDb?.updatedAt || fallback.meta.updatedAt },
     settings: normalizeSettings(nextDb?.settings, fallback.settings),
-    supplies: Array.isArray(nextDb?.supplies) ? nextDb.supplies.map(normalizeSupply) : fallback.supplies,
+    supplies: Array.isArray(nextDb?.supplies)
+      ? nextDb.supplies.map(normalizeSupply).sort((a, b) => a.sortOrder - b.sortOrder)
+      : fallback.supplies,
     recipes: Array.isArray(nextDb?.recipes) ? nextDb.recipes.map(normalizeRecipe) : fallback.recipes,
     recipeVariants: Array.isArray(nextDb?.recipeVariants) ? nextDb.recipeVariants : fallback.recipeVariants,
     recipeVariantIngredients: Array.isArray(nextDb?.recipeVariantIngredients)
@@ -353,9 +355,10 @@ function normalizeHandoverNote(note) {
   };
 }
 
-function normalizeSupply(supply) {
+function normalizeSupply(supply, index = 0) {
   const fallbackQty = Number(supply?.purchaseUnitQty ?? supply?.packageQty ?? 1000);
   const purchaseUnitQty = Number.isFinite(fallbackQty) && fallbackQty > 0 ? fallbackQty : 1000;
+  const sortOrder = Number(supply?.sortOrder);
   const savedRecommendedEa = Number(supply?.recommendedOrderEa);
   const savedRecommendedQty = Number(supply?.recommendedOrderQty || 0);
   const recommendedOrderEa =
@@ -371,6 +374,7 @@ function normalizeSupply(supply) {
     recommendedOrderQty: recommendedOrderEa,
     recommendedOrderEa,
     purchaseUnitQty,
+    sortOrder: Number.isFinite(sortOrder) && sortOrder > 0 ? sortOrder : index + 1,
     updatedAt: supply?.updatedAt || supply?.createdAt || nowIso(),
   };
 }
@@ -508,7 +512,7 @@ function syncSelectedIds() {
     state.selectedVariantId = variants[0]?.id || null;
   }
   if (!state.selectedAnalysisSupplyId || !db.supplies.some((supply) => supply.id === state.selectedAnalysisSupplyId)) {
-    state.selectedAnalysisSupplyId = db.supplies[0]?.id || null;
+    state.selectedAnalysisSupplyId = getSuppliesForAdmin()[0]?.id || null;
   }
   if (!state.selectedChecklistTaskId || !getChecklistTask(state.selectedChecklistTaskId)) {
     state.selectedChecklistTaskId = getChecklistTasksForAdmin()[0]?.id || null;
@@ -614,6 +618,9 @@ function seedDb() {
     makeSupply("supply_cream", "생크림", "g", 1000, 500, 3, "유제품"),
     makeSupply("supply_cheese_powder", "치즈파우더", "g", 1000, 300, 2, "분말"),
   ];
+  supplies.forEach((supply, index) => {
+    supply.sortOrder = index + 1;
+  });
 
   const recipes = [
     {
@@ -715,7 +722,7 @@ function seedDb() {
   };
 }
 
-function makeSupply(id, name, unit, currentStock, minStock, recommendedOrderEa, category, purchaseUnitQty = 1000) {
+function makeSupply(id, name, unit, currentStock, minStock, recommendedOrderEa, category, purchaseUnitQty = 1000, sortOrder = 0) {
   const createdAt = nowIso();
   return {
     id,
@@ -727,6 +734,7 @@ function makeSupply(id, name, unit, currentStock, minStock, recommendedOrderEa, 
     recommendedOrderEa,
     purchaseUnitQty,
     category,
+    sortOrder,
     isActive: true,
     createdAt,
     updatedAt: createdAt,
@@ -996,6 +1004,10 @@ function getVariant(variantId) {
 
 function getSupply(supplyId) {
   return db.supplies.find((supply) => supply.id === supplyId);
+}
+
+function getSuppliesForAdmin() {
+  return [...db.supplies].sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
 }
 
 function getVariantsForRecipe(recipeId, activeOnly = true) {
@@ -2095,6 +2107,7 @@ function renderRecipeAdmin(container) {
         <div class="column-footer">
           <button class="button button--ghost button--small" type="button" id="addVariant">배수 추가</button>
           <button class="button button--ghost button--small" type="button" id="cloneVariant" ${variant ? "" : "disabled"}>복제</button>
+          <button class="button button--danger button--small" type="button" id="deleteVariant" ${variant ? "" : "disabled"}>삭제</button>
         </div>
       </section>
       <section class="admin-column">
@@ -2147,7 +2160,7 @@ function renderRecipeAdmin(container) {
                 <div id="ingredientEditor">
                   ${
                     ingredients.length
-                      ? ingredients.map((ingredient) => renderIngredientRow(ingredient)).join("")
+                      ? ingredients.map((ingredient) => renderIngredientRow(ingredient, getIngredientBaseQty(variant, ingredient))).join("")
                       : `<p class="muted">등록된 소모품 사용량이 없습니다.</p>`
                   }
                 </div>
@@ -2179,11 +2192,13 @@ function renderRecipeAdmin(container) {
     });
   });
   container.querySelector("#addRecipe")?.addEventListener("click", addRecipe);
-  container.querySelector("#addVariant")?.addEventListener("click", addVariant);
-  container.querySelector("#cloneVariant")?.addEventListener("click", cloneVariant);
+  container.querySelector("#addVariant")?.addEventListener("click", () => addVariant(container));
+  container.querySelector("#cloneVariant")?.addEventListener("click", () => cloneVariant(container));
+  container.querySelector("#deleteVariant")?.addEventListener("click", () => deleteVariant(container));
   container.querySelector("#addIngredient")?.addEventListener("click", () => addVariantIngredient(container));
   container.querySelector("#saveRecipeAdmin")?.addEventListener("click", () => saveRecipeAdmin(container));
   container.querySelector("#deleteRecipe")?.addEventListener("click", deleteRecipe);
+  container.querySelector("#variantMultiplier")?.addEventListener("input", () => updateVariantIngredientQuantityPreview(container));
   container.querySelectorAll("[data-remove-ingredient]").forEach((button) => {
     button.addEventListener("click", () => {
       applyRecipeAdminFormValues(container);
@@ -2195,13 +2210,40 @@ function renderRecipeAdmin(container) {
   });
 }
 
-function renderIngredientRow(ingredient) {
+function getIngredientBaseQty(variant, ingredient) {
+  const currentMultiplier = Number(variant?.multiplier || 1) || 1;
+  const variants = getVariantsForRecipe(variant?.recipeId, false);
+  const baseVariant =
+    variants.find((item) => Number(item.multiplier) === 1) ||
+    variants.sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0))[0];
+  const baseMultiplier = Number(baseVariant?.multiplier || 1) || 1;
+  const baseIngredient = getIngredientsForVariant(baseVariant?.id).find((item) => item.supplyId === ingredient.supplyId);
+  const sourceQty = Number(baseIngredient?.qty ?? ingredient.qty ?? 0);
+  const divisor = baseIngredient ? baseMultiplier : currentMultiplier;
+  return divisor ? sourceQty / divisor : sourceQty;
+}
+
+function formatQuantityInputValue(value) {
+  const normalized = Math.round(Number(value || 0) * 1000) / 1000;
+  return Number.isInteger(normalized) ? String(normalized) : String(normalized).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function updateVariantIngredientQuantityPreview(container) {
+  const multiplier = Number(container.querySelector("#variantMultiplier")?.value || 0);
+  if (!Number.isFinite(multiplier)) return;
+  container.querySelectorAll("[data-ingredient-base-qty]").forEach((input) => {
+    const baseQty = Number(input.dataset.ingredientBaseQty || 0);
+    input.value = formatQuantityInputValue(baseQty * multiplier);
+  });
+}
+
+function renderIngredientRow(ingredient, baseQty = Number(ingredient.qty || 0)) {
   return `
     <div class="ingredient-row" data-ingredient-row="${ingredient.id}">
       <label class="field">
         <span>소모품</span>
         <select data-ingredient-supply="${ingredient.id}">
-          ${db.supplies
+          ${getSuppliesForAdmin()
             .map(
               (supply) => `
                 <option value="${supply.id}" ${supply.id === ingredient.supplyId ? "selected" : ""}>${escapeHtml(supply.name)}</option>
@@ -2212,7 +2254,7 @@ function renderIngredientRow(ingredient) {
       </label>
       <label class="field">
         <span>수량</span>
-        <input data-ingredient-qty="${ingredient.id}" type="number" step="1" value="${ingredient.qty}" />
+        <input data-ingredient-qty="${ingredient.id}" data-ingredient-base-qty="${escapeAttr(formatQuantityInputValue(baseQty))}" type="number" step="1" value="${ingredient.qty}" />
       </label>
       <button class="icon-button" data-remove-ingredient="${ingredient.id}" type="button" aria-label="소모품 삭제">
         <span class="icon" aria-hidden="true">
@@ -2299,6 +2341,14 @@ function moveRecipe(sourceRecipeId, targetRecipeId, position = "before") {
   renderAdminScreen();
 }
 
+function reorderVariants(recipeId) {
+  const now = nowIso();
+  getVariantsForRecipe(recipeId, false).forEach((variant, index) => {
+    variant.sortOrder = index + 1;
+    variant.updatedAt = now;
+  });
+}
+
 function addRecipe() {
   const createdAt = nowIso();
   const recipe = {
@@ -2318,8 +2368,9 @@ function addRecipe() {
   renderAdminScreen();
 }
 
-function addVariant() {
+function addVariant(container) {
   if (!state.selectedRecipeId) return;
+  applyRecipeAdminFormValues(container);
   const createdAt = nowIso();
   const variants = getVariantsForRecipe(state.selectedRecipeId, false);
   const variant = {
@@ -2339,7 +2390,8 @@ function addVariant() {
   renderAdminScreen();
 }
 
-function cloneVariant() {
+function cloneVariant(container) {
+  applyRecipeAdminFormValues(container);
   const source = getVariant(state.selectedVariantId);
   if (!source) return;
   const createdAt = nowIso();
@@ -2368,10 +2420,25 @@ function cloneVariant() {
   renderAdminScreen();
 }
 
-function addVariantIngredient(container) {
-  if (!state.selectedVariantId || !db.supplies.length) return;
+function deleteVariant(container) {
+  const variant = getVariant(state.selectedVariantId);
+  if (!variant) return;
   applyRecipeAdminFormValues(container);
-  db.recipeVariantIngredients.push(makeIngredient(state.selectedVariantId, db.supplies[0].id, 0, db.supplies[0].unit));
+  const recipeId = variant.recipeId;
+  db.recipeVariants = db.recipeVariants.filter((item) => item.id !== variant.id);
+  db.recipeVariantIngredients = db.recipeVariantIngredients.filter((ingredient) => ingredient.recipeVariantId !== variant.id);
+  reorderVariants(recipeId);
+  state.selectedVariantId = getVariantsForRecipe(recipeId, false)[0]?.id || null;
+  state.savedMessage = `${variant.label} 배수를 삭제했습니다.`;
+  saveDb();
+  renderAdminScreen();
+}
+
+function addVariantIngredient(container) {
+  const supplies = getSuppliesForAdmin();
+  if (!state.selectedVariantId || !supplies.length) return;
+  applyRecipeAdminFormValues(container);
+  db.recipeVariantIngredients.push(makeIngredient(state.selectedVariantId, supplies[0].id, 0, supplies[0].unit));
   state.savedMessage = "소모품을 추가했습니다.";
   saveDb();
   renderAdminScreen();
@@ -2427,12 +2494,14 @@ function saveRecipeAdmin(container) {
 }
 
 function renderSuppliesAdmin(container) {
+  const supplies = getSuppliesForAdmin();
   container.innerHTML = `
     <div class="admin-card">
       <div class="table-wrap">
-        <table>
+        <table class="supply-admin-table">
           <thead>
             <tr>
+              <th></th>
               <th>소모품</th>
               <th>단위</th>
               <th>현재 재고</th>
@@ -2440,13 +2509,19 @@ function renderSuppliesAdmin(container) {
               <th>1ea 용량</th>
               <th>추천 발주량(ea)</th>
               <th>사용</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
-            ${db.supplies
+            ${supplies
               .map(
                 (supply) => `
-                  <tr data-supply-row="${supply.id}">
+                  <tr class="supply-admin-row supply-admin-row--draggable" draggable="true" data-supply-row="${supply.id}" data-supply-drag="${supply.id}">
+                    <td class="supply-drag-cell">
+                      <span class="drag-handle" data-supply-drag-handle aria-hidden="true">
+                        <svg viewBox="0 0 24 24"><path d="M9 5h.01"/><path d="M9 12h.01"/><path d="M9 19h.01"/><path d="M15 5h.01"/><path d="M15 12h.01"/><path d="M15 19h.01"/></svg>
+                      </span>
+                    </td>
                     <td><input data-supply-name="${supply.id}" value="${escapeAttr(supply.name)}" /></td>
                     <td><input data-supply-unit="${supply.id}" value="${escapeAttr(supply.unit)}" /></td>
                     <td><input data-supply-stock="${supply.id}" type="number" value="${supply.currentStock}" /></td>
@@ -2454,6 +2529,13 @@ function renderSuppliesAdmin(container) {
                     <td><input data-supply-purchase="${supply.id}" type="number" min="0" value="${supply.purchaseUnitQty || 1000}" /></td>
                     <td><input data-supply-order="${supply.id}" type="number" min="0" step="1" value="${supply.recommendedOrderEa || supply.recommendedOrderQty || 0}" /></td>
                     <td><input data-supply-active="${supply.id}" type="checkbox" ${supply.isActive ? "checked" : ""} /></td>
+                    <td class="supply-action-cell">
+                      <button class="icon-button" data-delete-supply="${supply.id}" type="button" aria-label="${escapeAttr(supply.name)} 삭제">
+                        <span class="icon" aria-hidden="true">
+                          <svg viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M6 7l1 14h10l1-14"/><path d="M9 7V4h6v3"/></svg>
+                        </span>
+                      </button>
+                    </td>
                   </tr>
                 `,
               )
@@ -2468,32 +2550,147 @@ function renderSuppliesAdmin(container) {
       </div>
     </div>
   `;
-  container.querySelector("#addSupply").addEventListener("click", () => {
-    db.supplies.push(makeSupply(uid("supply"), "새 소모품", "g", 0, 0, 0, ""));
-    saveDb();
-    renderAdminScreen();
-  });
-  container.querySelector("#saveSupplies").addEventListener("click", () => {
-    const now = nowIso();
-    db.supplies.forEach((supply) => {
-      supply.name = container.querySelector(`[data-supply-name="${supply.id}"]`).value.trim() || supply.name;
-      supply.unit = container.querySelector(`[data-supply-unit="${supply.id}"]`).value.trim() || supply.unit;
-      supply.currentStock = Number(container.querySelector(`[data-supply-stock="${supply.id}"]`).value || 0);
-      supply.minStock = Number(container.querySelector(`[data-supply-min="${supply.id}"]`).value || 0);
-      supply.purchaseUnitQty = Number(container.querySelector(`[data-supply-purchase="${supply.id}"]`).value || 0);
-      supply.recommendedOrderEa = Number(container.querySelector(`[data-supply-order="${supply.id}"]`).value || 0);
-      supply.recommendedOrderQty = supply.recommendedOrderEa;
-      supply.isActive = Boolean(container.querySelector(`[data-supply-active="${supply.id}"]`).checked);
-      supply.updatedAt = now;
-    });
-    state.savedMessage = "저장 완료";
-    saveDb();
-    renderAdminScreen();
+  setupSupplyDragSorting(container);
+  container.querySelector("#addSupply").addEventListener("click", () => addSupply(container));
+  container.querySelector("#saveSupplies").addEventListener("click", () => saveSuppliesAdmin(container));
+  container.querySelectorAll("[data-delete-supply]").forEach((button) => {
+    button.addEventListener("click", () => deleteSupply(container, button.dataset.deleteSupply));
   });
 }
 
+function applySuppliesAdminFormValues(container) {
+  const now = nowIso();
+  getSuppliesForAdmin().forEach((supply) => {
+    const nameInput = container.querySelector(`[data-supply-name="${supply.id}"]`);
+    if (!nameInput) return;
+    supply.name = nameInput.value.trim() || supply.name;
+    supply.unit = container.querySelector(`[data-supply-unit="${supply.id}"]`)?.value.trim() || supply.unit;
+    supply.currentStock = Number(container.querySelector(`[data-supply-stock="${supply.id}"]`)?.value || 0);
+    supply.minStock = Number(container.querySelector(`[data-supply-min="${supply.id}"]`)?.value || 0);
+    supply.purchaseUnitQty = Number(container.querySelector(`[data-supply-purchase="${supply.id}"]`)?.value || 0);
+    supply.recommendedOrderEa = Number(container.querySelector(`[data-supply-order="${supply.id}"]`)?.value || 0);
+    supply.recommendedOrderQty = supply.recommendedOrderEa;
+    supply.isActive = Boolean(container.querySelector(`[data-supply-active="${supply.id}"]`)?.checked);
+    supply.updatedAt = now;
+  });
+}
+
+function saveSuppliesAdmin(container) {
+  applySuppliesAdminFormValues(container);
+  state.savedMessage = "저장 완료";
+  saveDb();
+  renderAdminScreen();
+}
+
+function addSupply(container) {
+  applySuppliesAdminFormValues(container);
+  const nextSortOrder = Math.max(0, ...db.supplies.map((supply) => Number(supply.sortOrder || 0))) + 1;
+  db.supplies.push(makeSupply(uid("supply"), "새 소모품", "g", 0, 0, 0, "", 1000, nextSortOrder));
+  state.savedMessage = "소모품을 추가했습니다.";
+  saveDb();
+  renderAdminScreen();
+}
+
+function deleteSupply(container, supplyId) {
+  applySuppliesAdminFormValues(container);
+  const supply = getSupply(supplyId);
+  if (!supply) return;
+  db.supplies = getSuppliesForAdmin().filter((item) => item.id !== supplyId);
+  db.recipeVariantIngredients = db.recipeVariantIngredients.filter((ingredient) => ingredient.supplyId !== supplyId);
+  if (state.selectedAnalysisSupplyId === supplyId) {
+    state.selectedAnalysisSupplyId = getSuppliesForAdmin()[0]?.id || null;
+  }
+  reorderSupplies(db.supplies);
+  state.savedMessage = `${supply.name} 소모품을 삭제했습니다.`;
+  saveDb();
+  renderAdminScreen();
+}
+
+function setupSupplyDragSorting(container) {
+  let draggedSupplyId = "";
+  container.querySelectorAll("[data-supply-drag]").forEach((row) => {
+    row.addEventListener("dragstart", (event) => {
+      if (!event.target.closest("[data-supply-drag-handle]")) {
+        event.preventDefault();
+        return;
+      }
+      draggedSupplyId = row.dataset.supplyDrag;
+      row.classList.add("is-dragging");
+      if (event.dataTransfer) {
+        const dragImage = document.createElement("canvas");
+        dragImage.width = 1;
+        dragImage.height = 1;
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", draggedSupplyId);
+        event.dataTransfer.setDragImage(dragImage, 0, 0);
+      }
+    });
+    row.addEventListener("dragend", () => {
+      draggedSupplyId = "";
+      clearSupplyDropMarkers(container);
+      container.querySelectorAll(".supply-admin-row.is-dragging").forEach((item) => item.classList.remove("is-dragging"));
+    });
+    row.addEventListener("dragover", (event) => {
+      if (!draggedSupplyId || draggedSupplyId === row.dataset.supplyDrag) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+      const position = getSupplyDropPosition(event, row);
+      clearSupplyDropMarkers(container);
+      row.classList.add(position === "after" ? "is-drop-after" : "is-drop-before");
+    });
+    row.addEventListener("dragleave", () => {
+      row.classList.remove("is-drop-before", "is-drop-after");
+    });
+    row.addEventListener("drop", (event) => {
+      event.preventDefault();
+      const sourceId = event.dataTransfer?.getData("text/plain") || draggedSupplyId;
+      const position = getSupplyDropPosition(event, row);
+      applySuppliesAdminFormValues(container);
+      clearSupplyDropMarkers(container);
+      moveSupply(sourceId, row.dataset.supplyDrag, position);
+    });
+  });
+}
+
+function getSupplyDropPosition(event, target) {
+  const rect = target.getBoundingClientRect();
+  return event.clientY > rect.top + rect.height / 2 ? "after" : "before";
+}
+
+function clearSupplyDropMarkers(container) {
+  container.querySelectorAll(".supply-admin-row.is-drop-before, .supply-admin-row.is-drop-after").forEach((item) => {
+    item.classList.remove("is-drop-before", "is-drop-after");
+  });
+}
+
+function moveSupply(sourceSupplyId, targetSupplyId, position = "before") {
+  if (!sourceSupplyId || !targetSupplyId || sourceSupplyId === targetSupplyId) return;
+  const ordered = getSuppliesForAdmin();
+  const sourceIndex = ordered.findIndex((supply) => supply.id === sourceSupplyId);
+  const targetIndex = ordered.findIndex((supply) => supply.id === targetSupplyId);
+  if (sourceIndex < 0 || targetIndex < 0) return;
+
+  const [movedSupply] = ordered.splice(sourceIndex, 1);
+  const nextTargetIndex = ordered.findIndex((supply) => supply.id === targetSupplyId);
+  ordered.splice(position === "after" ? nextTargetIndex + 1 : nextTargetIndex, 0, movedSupply);
+  reorderSupplies(ordered);
+  state.savedMessage = "소모품 순서를 저장했습니다.";
+  saveDb();
+  renderAdminScreen();
+}
+
+function reorderSupplies(orderedSupplies = getSuppliesForAdmin()) {
+  const now = nowIso();
+  orderedSupplies.forEach((supply, index) => {
+    supply.sortOrder = index + 1;
+    supply.updatedAt = now;
+  });
+  db.supplies = orderedSupplies;
+}
+
 function renderAdjustAdmin(container) {
-  const firstSupply = db.supplies[0] || null;
+  const supplies = getSuppliesForAdmin();
+  const firstSupply = supplies[0] || null;
   const firstPackageQty = Number(firstSupply?.purchaseUnitQty || 1000);
   container.innerHTML = `
     <div class="admin-card">
@@ -2502,7 +2699,7 @@ function renderAdjustAdmin(container) {
         <label class="field">
           <span>품목</span>
           <select id="receiveSupply">
-            ${db.supplies.map((supply) => `<option value="${supply.id}">${escapeHtml(supply.name)} (${numberText(supply.currentStock)}${escapeHtml(supply.unit)})</option>`).join("")}
+            ${supplies.map((supply) => `<option value="${supply.id}">${escapeHtml(supply.name)} (${numberText(supply.currentStock)}${escapeHtml(supply.unit)})</option>`).join("")}
           </select>
         </label>
         <label class="field">
@@ -2539,12 +2736,12 @@ function renderAdjustAdmin(container) {
         <label class="field">
           <span>품목</span>
           <select id="adjustSupply">
-            ${db.supplies.map((supply) => `<option value="${supply.id}">${escapeHtml(supply.name)} (${numberText(supply.currentStock)}${escapeHtml(supply.unit)})</option>`).join("")}
+            ${supplies.map((supply) => `<option value="${supply.id}">${escapeHtml(supply.name)} (${numberText(supply.currentStock)}${escapeHtml(supply.unit)})</option>`).join("")}
           </select>
         </label>
         <label class="field">
           <span>실제 재고</span>
-          <input id="adjustActual" type="number" value="${db.supplies[0]?.currentStock || 0}" />
+          <input id="adjustActual" type="number" value="${firstSupply?.currentStock || 0}" />
         </label>
         <label class="field">
           <span>사유</span>
@@ -2933,7 +3130,8 @@ function renderUsageLineChart(points, unit) {
 }
 
 function renderUsageAnalysisAdmin(container) {
-  const supply = getSupply(state.selectedAnalysisSupplyId) || db.supplies[0] || null;
+  const supplies = getSuppliesForAdmin();
+  const supply = getSupply(state.selectedAnalysisSupplyId) || supplies[0] || null;
   if (!supply) {
     container.innerHTML = `<div class="admin-card"><div class="empty-state">분석할 소모품이 없습니다.</div></div>`;
     return;
@@ -2952,7 +3150,7 @@ function renderUsageAnalysisAdmin(container) {
         <label class="field">
           <span>재료</span>
           <select id="analysisSupply">
-            ${db.supplies.map((item) => `<option value="${item.id}" ${item.id === supply.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
+            ${supplies.map((item) => `<option value="${item.id}" ${item.id === supply.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
           </select>
         </label>
         <div class="segmented-control" aria-label="분석 기준">
