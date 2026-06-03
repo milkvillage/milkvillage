@@ -2181,12 +2181,14 @@ function renderRecipeAdmin(container) {
   container.querySelector("#addRecipe")?.addEventListener("click", addRecipe);
   container.querySelector("#addVariant")?.addEventListener("click", addVariant);
   container.querySelector("#cloneVariant")?.addEventListener("click", cloneVariant);
-  container.querySelector("#addIngredient")?.addEventListener("click", addVariantIngredient);
+  container.querySelector("#addIngredient")?.addEventListener("click", () => addVariantIngredient(container));
   container.querySelector("#saveRecipeAdmin")?.addEventListener("click", () => saveRecipeAdmin(container));
   container.querySelector("#deleteRecipe")?.addEventListener("click", deleteRecipe);
   container.querySelectorAll("[data-remove-ingredient]").forEach((button) => {
     button.addEventListener("click", () => {
+      applyRecipeAdminFormValues(container);
       db.recipeVariantIngredients = db.recipeVariantIngredients.filter((item) => item.id !== button.dataset.removeIngredient);
+      state.savedMessage = "소모품을 삭제했습니다.";
       saveDb();
       renderAdminScreen();
     });
@@ -2366,9 +2368,11 @@ function cloneVariant() {
   renderAdminScreen();
 }
 
-function addVariantIngredient() {
+function addVariantIngredient(container) {
   if (!state.selectedVariantId || !db.supplies.length) return;
+  applyRecipeAdminFormValues(container);
   db.recipeVariantIngredients.push(makeIngredient(state.selectedVariantId, db.supplies[0].id, 0, db.supplies[0].unit));
+  state.savedMessage = "소모품을 추가했습니다.";
   saveDb();
   renderAdminScreen();
 }
@@ -2388,7 +2392,7 @@ function deleteRecipe() {
   renderAdminScreen();
 }
 
-function saveRecipeAdmin(container) {
+function applyRecipeAdminFormValues(container) {
   const now = nowIso();
   const recipe = getRecipe(state.selectedRecipeId);
   const variant = getVariant(state.selectedVariantId);
@@ -2405,7 +2409,7 @@ function saveRecipeAdmin(container) {
     variant.updatedAt = now;
   }
   getIngredientsForVariant(variant?.id).forEach((ingredient) => {
-    const supplyId = container.querySelector(`[data-ingredient-supply="${ingredient.id}"]`)?.value;
+    const supplyId = container.querySelector(`[data-ingredient-supply="${ingredient.id}"]`)?.value || ingredient.supplyId;
     const qty = Number(container.querySelector(`[data-ingredient-qty="${ingredient.id}"]`)?.value || 0);
     const supply = getSupply(supplyId);
     ingredient.supplyId = supplyId;
@@ -2413,6 +2417,10 @@ function saveRecipeAdmin(container) {
     ingredient.unit = supply?.unit || ingredient.unit;
     ingredient.updatedAt = now;
   });
+}
+
+function saveRecipeAdmin(container) {
+  applyRecipeAdminFormValues(container);
   state.savedMessage = "저장 완료";
   saveDb();
   renderAdminScreen();
