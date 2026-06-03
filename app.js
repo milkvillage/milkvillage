@@ -1684,7 +1684,7 @@ function renderAttendanceScreen() {
             <button class="button button--danger" type="button" data-attendance-status="absent" ${selectedStaff ? "" : "disabled"}>결근</button>
             ${
               selectedRecord
-                ? `<span class="attendance-current-status ${selectedRecord.status === "present" ? "is-present" : "is-absent"}">${attendanceStatusLabel(selectedRecord.status)} 기록됨</span>`
+                ? `<span class="attendance-current-status ${selectedRecord.status === "present" ? "is-present" : "is-absent"}">${attendanceRecordStatusText(selectedRecord)} 기록됨</span>`
                 : `<span class="muted">선택 날짜 기록 없음</span>`
             }
           </div>
@@ -1710,7 +1710,9 @@ function renderAttendanceScreen() {
   setupSignaturePad(els.workArea.querySelector("#employeeSignaturePad"), selectedRecord?.employeeSignature || "");
   setupSignaturePad(els.workArea.querySelector("#managerSignaturePad"), selectedRecord?.managerSignature || "");
   els.workArea.querySelectorAll("[data-clear-signature]").forEach((button) => {
-    button.addEventListener("click", () => clearSignaturePad(els.workArea.querySelector(`#${button.dataset.clearSignature}SignaturePad`)));
+    button.addEventListener("click", () => {
+      handleSignatureClearRequest(button, els.workArea.querySelector(`#${button.dataset.clearSignature}SignaturePad`));
+    });
   });
   els.workArea.querySelectorAll("[data-attendance-status]").forEach((button) => {
     button.addEventListener("click", () => saveAttendanceRecord(button.dataset.attendanceStatus, els.workArea));
@@ -1797,8 +1799,8 @@ function renderAttendanceCalendar(monthKey) {
               ? records
                   .map(
                     (record) => `
-                      <span class="attendance-chip ${record.status === "present" ? "is-present" : "is-absent"}">
-                        ${escapeHtml(record.staffName)} ${attendanceStatusLabel(record.status)}
+                      <span class="attendance-chip ${record.status === "present" ? "is-present" : "is-absent"} ${isSignedPresentRecord(record) ? "is-signed" : ""}">
+                        ${escapeHtml(record.staffName)} ${attendanceRecordStatusText(record)}
                       </span>
                     `,
                   )
@@ -1819,6 +1821,14 @@ function renderAttendanceCalendar(monthKey) {
 
 function attendanceStatusLabel(status) {
   return status === "absent" ? "결근" : "출근";
+}
+
+function isSignedPresentRecord(record) {
+  return record?.status === "present" && Boolean(record.employeeSignature) && Boolean(record.managerSignature);
+}
+
+function attendanceRecordStatusText(record) {
+  return isSignedPresentRecord(record) ? "서명완료 출근" : attendanceStatusLabel(record?.status);
 }
 
 function formatAttendanceMonth(monthKey) {
@@ -1950,6 +1960,28 @@ function clearSignaturePad(canvas) {
   canvas.dataset.initialSignature = "";
   canvas.dataset.signatureDirty = "1";
   canvas.dataset.signatureLoaded = "0";
+}
+
+function handleSignatureClearRequest(button, canvas) {
+  if (!button || !canvas || canvas.dataset.hasSignature !== "1") return;
+  window.clearTimeout(button.clearSignatureTimer);
+  if (button.dataset.clearConfirm === "1") {
+    button.dataset.clearConfirm = "0";
+    button.classList.remove("is-confirming");
+    button.textContent = "지우기";
+    clearSignaturePad(canvas);
+    return;
+  }
+
+  button.dataset.clearConfirm = "1";
+  button.classList.add("is-confirming");
+  button.textContent = "다시 눌러 삭제";
+  button.clearSignatureTimer = window.setTimeout(() => {
+    if (!button.isConnected) return;
+    button.dataset.clearConfirm = "0";
+    button.classList.remove("is-confirming");
+    button.textContent = "지우기";
+  }, 2400);
 }
 
 function getSignaturePadData(canvas) {
