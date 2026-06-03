@@ -77,6 +77,7 @@ const state = {
   selectedChecklistTaskId: null,
   selectedAnalysisSupplyId: null,
   selectedAttendanceStaffId: null,
+  selectedAttendanceDate: todayDateKey(),
   attendanceMonth: todayDateKey().slice(0, 7),
   selectedAlarmId: null,
   analysisMode: "weekday",
@@ -1632,17 +1633,21 @@ function renderOpsScreen() {
 function renderAttendanceScreen() {
   const staffMembers = getActiveStaffMembers();
   const selectedStaff = staffMembers.find((staff) => staff.id === state.selectedAttendanceStaffId) || null;
-  const today = todayDateKey();
-  const todayRecord = selectedStaff ? getAttendanceRecord(today, selectedStaff.id) : null;
+  const selectedDate = getSelectedAttendanceDate();
+  const selectedRecord = selectedStaff ? getAttendanceRecord(selectedDate, selectedStaff.id) : null;
 
   els.workArea.innerHTML = `
     <section class="attendance-screen" aria-label="근퇴기록">
       <div class="panel-header">
         <h2>근퇴기록</h2>
-        <p>근무자가 이름을 선택하고 출근 또는 결근을 기록합니다.</p>
+        <p>달력에서 날짜를 선택한 뒤 근무자 이름, 출근/결근, 서명을 기록합니다.</p>
       </div>
       <div class="attendance-body">
         <section class="attendance-card">
+          <div class="attendance-selected-date">
+            <span>선택 날짜</span>
+            <strong>${formatAttendanceDate(selectedDate)}</strong>
+          </div>
           <div class="attendance-form-grid">
             <label class="field">
               <span>근무자 이름</span>
@@ -1657,22 +1662,30 @@ function renderAttendanceScreen() {
                   .join("")}
               </select>
             </label>
-            <label class="field">
-              <span>근무자 서명</span>
-              <input id="employeeSignature" type="text" value="${escapeAttr(todayRecord?.employeeSignature || selectedStaff?.name || "")}" placeholder="근무자 서명" />
-            </label>
-            <label class="field">
-              <span>매니저 서명</span>
-              <input id="managerSignature" type="text" value="${escapeAttr(todayRecord?.managerSignature || "")}" placeholder="매니저 서명" />
-            </label>
+          </div>
+          <div class="signature-section">
+            <div class="signature-card">
+              <div class="signature-heading">
+                <strong>근무자 서명</strong>
+                <button class="button button--ghost button--small" type="button" data-clear-signature="employee">지우기</button>
+              </div>
+              <canvas class="signature-pad" id="employeeSignaturePad" aria-label="근무자 서명 입력"></canvas>
+            </div>
+            <div class="signature-card">
+              <div class="signature-heading">
+                <strong>매니저 서명</strong>
+                <button class="button button--ghost button--small" type="button" data-clear-signature="manager">지우기</button>
+              </div>
+              <canvas class="signature-pad" id="managerSignaturePad" aria-label="매니저 서명 입력"></canvas>
+            </div>
           </div>
           <div class="attendance-action-row">
             <button class="button button--primary" type="button" data-attendance-status="present" ${selectedStaff ? "" : "disabled"}>출근</button>
             <button class="button button--danger" type="button" data-attendance-status="absent" ${selectedStaff ? "" : "disabled"}>결근</button>
             ${
-              todayRecord
-                ? `<span class="attendance-current-status ${todayRecord.status === "present" ? "is-present" : "is-absent"}">${attendanceStatusLabel(todayRecord.status)} 기록됨</span>`
-                : `<span class="muted">오늘 기록 없음</span>`
+              selectedRecord
+                ? `<span class="attendance-current-status ${selectedRecord.status === "present" ? "is-present" : "is-absent"}">${attendanceStatusLabel(selectedRecord.status)} 기록됨</span>`
+                : `<span class="muted">선택 날짜 기록 없음</span>`
             }
           </div>
           ${staffMembers.length ? "" : `<div class="empty-state">관리자 화면에서 근무자 이름을 먼저 등록해주세요.</div>`}
@@ -1694,15 +1707,27 @@ function renderAttendanceScreen() {
     state.selectedAttendanceStaffId = staffSelect.value || null;
     renderAttendanceScreen();
   });
+  setupSignaturePad(els.workArea.querySelector("#employeeSignaturePad"), selectedRecord?.employeeSignature || "");
+  setupSignaturePad(els.workArea.querySelector("#managerSignaturePad"), selectedRecord?.managerSignature || "");
+  els.workArea.querySelectorAll("[data-clear-signature]").forEach((button) => {
+    button.addEventListener("click", () => clearSignaturePad(els.workArea.querySelector(`#${button.dataset.clearSignature}SignaturePad`)));
+  });
   els.workArea.querySelectorAll("[data-attendance-status]").forEach((button) => {
     button.addEventListener("click", () => saveAttendanceRecord(button.dataset.attendanceStatus, els.workArea));
   });
+  els.workArea.querySelectorAll("[data-attendance-date]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedAttendanceDate = button.dataset.attendanceDate;
+      state.attendanceMonth = state.selectedAttendanceDate.slice(0, 7);
+      renderAttendanceScreen();
+    });
+  });
   els.workArea.querySelector("#attendancePrevMonth")?.addEventListener("click", () => {
-    state.attendanceMonth = shiftMonthKey(state.attendanceMonth, -1);
+    setAttendanceMonthByOffset(-1);
     renderAttendanceScreen();
   });
   els.workArea.querySelector("#attendanceNextMonth")?.addEventListener("click", () => {
-    state.attendanceMonth = shiftMonthKey(state.attendanceMonth, 1);
+    setAttendanceMonthByOffset(1);
     renderAttendanceScreen();
   });
 }
@@ -1713,20 +1738,19 @@ function saveAttendanceRecord(status, container) {
     alert("근무자 이름을 먼저 선택해주세요.");
     return;
   }
-  const employeeSignatureInput = container.querySelector("#employeeSignature");
-  const employeeSignature = employeeSignatureInput.value.trim();
+  const employeeSignature = getSignaturePadData(container.querySelector("#employeeSignaturePad"));
   if (!employeeSignature) {
-    employeeSignatureInput.focus();
+    alert("근무자 서명을 손가락으로 입력해주세요.");
     return;
   }
 
-  const today = todayDateKey();
+  const selectedDate = getSelectedAttendanceDate();
   const updatedAt = nowIso();
-  let record = getAttendanceRecord(today, staff.id);
+  let record = getAttendanceRecord(selectedDate, staff.id);
   if (!record) {
     record = {
       id: uid("attendance"),
-      date: today,
+      date: selectedDate,
       staffId: staff.id,
       staffName: staff.name,
       status: "present",
@@ -1740,7 +1764,7 @@ function saveAttendanceRecord(status, container) {
   record.staffName = staff.name;
   record.status = status === "absent" ? "absent" : "present";
   record.employeeSignature = employeeSignature;
-  record.managerSignature = container.querySelector("#managerSignature")?.value.trim() || "";
+  record.managerSignature = getSignaturePadData(container.querySelector("#managerSignaturePad"));
   record.recordedAt = record.recordedAt || updatedAt;
   record.updatedAt = updatedAt;
   saveDb();
@@ -1765,7 +1789,7 @@ function renderAttendanceCalendar(monthKey) {
     const date = `${monthKey}-${String(day).padStart(2, "0")}`;
     const records = recordsByDate.get(date) || [];
     cells.push(`
-      <div class="attendance-day ${date === todayDateKey() ? "is-today" : ""}">
+      <button class="attendance-day ${date === todayDateKey() ? "is-today" : ""} ${date === getSelectedAttendanceDate() ? "is-selected" : ""}" type="button" data-attendance-date="${date}">
         <strong>${day}</strong>
         <div class="attendance-day-records">
           ${
@@ -1782,7 +1806,7 @@ function renderAttendanceCalendar(monthKey) {
               : ""
           }
         </div>
-      </div>
+      </button>
     `);
   }
   return `
@@ -1802,10 +1826,138 @@ function formatAttendanceMonth(monthKey) {
   return `${year}년 ${month}월`;
 }
 
+function formatAttendanceDate(dateKey) {
+  const [year, month, date] = dateKey.split("-").map(Number);
+  if (!year || !month || !date) return dateKey;
+  return new Intl.DateTimeFormat("ko-KR", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+  }).format(new Date(year, month - 1, date));
+}
+
+function getSelectedAttendanceDate() {
+  const fallback = todayDateKey();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(state.selectedAttendanceDate || "")) {
+    state.selectedAttendanceDate = fallback;
+  }
+  if (!state.attendanceMonth) state.attendanceMonth = state.selectedAttendanceDate.slice(0, 7);
+  return state.selectedAttendanceDate;
+}
+
 function shiftMonthKey(monthKey, offset) {
   const [year, month] = monthKey.split("-").map(Number);
   const date = new Date(year, month - 1 + offset, 1);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function setAttendanceMonthByOffset(offset) {
+  const currentDate = getSelectedAttendanceDate();
+  const nextMonth = shiftMonthKey(state.attendanceMonth || currentDate.slice(0, 7), offset);
+  const [year, month] = nextMonth.split("-").map(Number);
+  const selectedDay = Number(currentDate.slice(8, 10)) || 1;
+  const lastDate = new Date(year, month, 0).getDate();
+  state.attendanceMonth = nextMonth;
+  state.selectedAttendanceDate = `${nextMonth}-${String(Math.min(selectedDay, lastDate)).padStart(2, "0")}`;
+}
+
+function isSignatureImage(value) {
+  return typeof value === "string" && value.startsWith("data:image/");
+}
+
+function setupSignaturePad(canvas, initialData = "") {
+  if (!canvas) return;
+  const context = canvas.getContext("2d");
+  const ratio = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(1, Math.round(rect.width || 320));
+  const height = Math.max(1, Math.round(rect.height || 140));
+  canvas.width = Math.round(width * ratio);
+  canvas.height = Math.round(height * ratio);
+  context.setTransform(ratio, 0, 0, ratio, 0, 0);
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  context.lineWidth = 4;
+  context.strokeStyle = "#0f1b2a";
+  context.clearRect(0, 0, width, height);
+  canvas.dataset.hasSignature = "0";
+  canvas.dataset.initialSignature = "";
+  canvas.dataset.signatureDirty = "0";
+  canvas.dataset.signatureLoaded = "0";
+
+  if (isSignatureImage(initialData)) {
+    canvas.dataset.hasSignature = "1";
+    canvas.dataset.initialSignature = initialData;
+    const image = new Image();
+    image.onload = () => {
+      if (canvas.dataset.signatureDirty === "1") return;
+      context.clearRect(0, 0, width, height);
+      context.drawImage(image, 0, 0, width, height);
+      canvas.dataset.hasSignature = "1";
+      canvas.dataset.signatureLoaded = "1";
+    };
+    image.src = initialData;
+  }
+
+  let isDrawing = false;
+  const getPoint = (event) => {
+    const box = canvas.getBoundingClientRect();
+    return {
+      x: event.clientX - box.left,
+      y: event.clientY - box.top,
+    };
+  };
+  const startDrawing = (event) => {
+    event.preventDefault();
+    const point = getPoint(event);
+    isDrawing = true;
+    canvas.dataset.hasSignature = "1";
+    canvas.dataset.initialSignature = "";
+    canvas.dataset.signatureDirty = "1";
+    canvas.setPointerCapture?.(event.pointerId);
+    context.beginPath();
+    context.moveTo(point.x, point.y);
+  };
+  const draw = (event) => {
+    if (!isDrawing) return;
+    event.preventDefault();
+    const point = getPoint(event);
+    context.lineTo(point.x, point.y);
+    context.stroke();
+  };
+  const stopDrawing = (event) => {
+    if (!isDrawing) return;
+    event.preventDefault();
+    isDrawing = false;
+    context.closePath();
+    canvas.releasePointerCapture?.(event.pointerId);
+  };
+
+  canvas.addEventListener("pointerdown", startDrawing);
+  canvas.addEventListener("pointermove", draw);
+  canvas.addEventListener("pointerup", stopDrawing);
+  canvas.addEventListener("pointercancel", stopDrawing);
+  canvas.addEventListener("pointerleave", stopDrawing);
+}
+
+function clearSignaturePad(canvas) {
+  if (!canvas) return;
+  const context = canvas.getContext("2d");
+  const rect = canvas.getBoundingClientRect();
+  context.clearRect(0, 0, rect.width, rect.height);
+  canvas.dataset.hasSignature = "0";
+  canvas.dataset.initialSignature = "";
+  canvas.dataset.signatureDirty = "1";
+  canvas.dataset.signatureLoaded = "0";
+}
+
+function getSignaturePadData(canvas) {
+  if (!canvas || canvas.dataset.hasSignature !== "1") return "";
+  if (canvas.dataset.initialSignature && canvas.dataset.signatureDirty !== "1" && canvas.dataset.signatureLoaded !== "1") {
+    return canvas.dataset.initialSignature;
+  }
+  return canvas.toDataURL("image/png");
 }
 
 function renderChecklistSection(sectionStat, date) {
