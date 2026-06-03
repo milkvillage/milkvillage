@@ -24,6 +24,12 @@ const staffScheduleDayLabels = {
   sat: "토",
   sun: "일",
 };
+const timeSelectOptions = Array.from({ length: 49 }, (_, index) => {
+  const totalMinutes = index * 30;
+  const hour = Math.floor(totalMinutes / 60);
+  const minute = totalMinutes % 60;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+});
 const LOG_RETENTION_DAYS = {
   alarmEventLogs: 30,
   inventoryTransactions: 90,
@@ -210,7 +216,8 @@ function normalizeTimeValue(value) {
   if (!match) return "";
   const hour = Number(match[1]);
   const minute = Number(match[2]);
-  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return "";
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 24 || minute < 0 || minute > 59) return "";
+  if (hour === 24 && minute !== 0) return "";
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
@@ -230,6 +237,21 @@ function minutesBetween(startTime, endTime) {
 
 function formatTimeRange(startTime, endTime) {
   return startTime && endTime ? `${startTime}-${endTime}` : "예정 없음";
+}
+
+function renderTimeSelect(attributes = {}, selectedValue = "", label = "") {
+  const normalizedValue = normalizeTimeValue(selectedValue);
+  const attributeText = Object.entries(attributes)
+    .map(([key, value]) => `${key}="${escapeAttr(value)}"`)
+    .join(" ");
+  return `
+    <select ${attributeText} aria-label="${escapeAttr(label)}">
+      <option value="">--:--</option>
+      ${timeSelectOptions
+        .map((time) => `<option value="${time}" ${time === normalizedValue ? "selected" : ""}>${time}</option>`)
+        .join("")}
+    </select>
+  `;
 }
 
 function saveDb() {
@@ -1757,19 +1779,19 @@ function renderAttendanceScreen() {
             <div class="attendance-time-grid">
               <label class="field">
                 <span>예정 시작</span>
-                <input id="attendanceScheduledStart" type="time" value="${escapeAttr(timingValues.scheduledStart)}" />
+                ${renderTimeSelect({ id: "attendanceScheduledStart" }, timingValues.scheduledStart, "예정 시작")}
               </label>
               <label class="field">
                 <span>예정 종료</span>
-                <input id="attendanceScheduledEnd" type="time" value="${escapeAttr(timingValues.scheduledEnd)}" />
+                ${renderTimeSelect({ id: "attendanceScheduledEnd" }, timingValues.scheduledEnd, "예정 종료")}
               </label>
               <label class="field">
                 <span>실제 출근</span>
-                <input id="attendanceActualStart" type="time" value="${escapeAttr(timingValues.actualStart)}" />
+                ${renderTimeSelect({ id: "attendanceActualStart" }, timingValues.actualStart, "실제 출근")}
               </label>
               <label class="field">
                 <span>실제 퇴근</span>
-                <input id="attendanceActualEnd" type="time" value="${escapeAttr(timingValues.actualEnd)}" />
+                ${renderTimeSelect({ id: "attendanceActualEnd" }, timingValues.actualEnd, "실제 퇴근")}
               </label>
             </div>
             <label class="field">
@@ -2673,8 +2695,8 @@ function renderStaffScheduleAdmin(staff) {
                   <input data-staff-schedule-enabled="${staff.id}:${dayKey}" type="checkbox" ${day.enabled ? "checked" : ""} />
                   ${staffScheduleDayLabels[dayKey]}
                 </label>
-                <input class="staff-time-input" data-staff-schedule-start="${staff.id}:${dayKey}" type="time" value="${escapeAttr(day.startTime)}" aria-label="${staffScheduleDayLabels[dayKey]} 시작" />
-                <input class="staff-time-input" data-staff-schedule-end="${staff.id}:${dayKey}" type="time" value="${escapeAttr(day.endTime)}" aria-label="${staffScheduleDayLabels[dayKey]} 종료" />
+                ${renderTimeSelect({ class: "staff-time-input", "data-staff-schedule-start": `${staff.id}:${dayKey}` }, day.startTime, `${staffScheduleDayLabels[dayKey]} 시작`)}
+                ${renderTimeSelect({ class: "staff-time-input", "data-staff-schedule-end": `${staff.id}:${dayKey}` }, day.endTime, `${staffScheduleDayLabels[dayKey]} 종료`)}
               </div>
             `;
           })
