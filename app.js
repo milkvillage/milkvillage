@@ -1788,7 +1788,10 @@ function renderAttendanceScreen() {
             <div class="signature-card">
               <div class="signature-heading">
                 <strong>매니저 서명</strong>
-                <button class="button button--ghost button--small" type="button" data-clear-signature="manager">지우기</button>
+                <div class="signature-button-group">
+                  <button class="button button--ghost button--small" type="button" data-clear-signature="manager">지우기</button>
+                  <button class="button button--primary button--small" type="button" id="confirmManagerAttendance" ${selectedRecord?.status === "present" ? "" : "disabled"}>확인</button>
+                </div>
               </div>
               <canvas class="signature-pad" id="managerSignaturePad" aria-label="매니저 서명 입력"></canvas>
             </div>
@@ -1796,9 +1799,10 @@ function renderAttendanceScreen() {
           <div class="attendance-action-row">
             <button class="button button--primary" type="button" data-attendance-status="present" ${selectedStaff ? "" : "disabled"}>출근</button>
             <button class="button button--danger" type="button" data-attendance-status="absent" ${selectedStaff ? "" : "disabled"}>결근</button>
+            <button class="button button--ghost" type="button" id="deleteAttendanceRecord" ${selectedRecord ? "" : "disabled"}>기록 삭제</button>
             ${
               selectedRecord
-                ? `<span class="attendance-current-status ${selectedRecord.status === "present" ? "is-present" : "is-absent"}">${attendanceRecordStatusText(selectedRecord)} 기록됨</span>`
+                ? `<span class="attendance-current-status ${attendanceRecordStateClass(selectedRecord)}">${attendanceRecordStatusText(selectedRecord)} 기록됨</span>`
                 : `<span class="muted">선택 날짜 기록 없음</span>`
             }
           </div>
@@ -1831,6 +1835,8 @@ function renderAttendanceScreen() {
   els.workArea.querySelectorAll("[data-attendance-status]").forEach((button) => {
     button.addEventListener("click", () => saveAttendanceRecord(button.dataset.attendanceStatus, els.workArea));
   });
+  els.workArea.querySelector("#confirmManagerAttendance")?.addEventListener("click", () => confirmManagerAttendance(els.workArea));
+  els.workArea.querySelector("#deleteAttendanceRecord")?.addEventListener("click", deleteAttendanceRecord);
   els.workArea.querySelectorAll("[data-attendance-date]").forEach((button) => {
     button.addEventListener("click", () => {
       state.selectedAttendanceDate = button.dataset.attendanceDate;
@@ -1894,7 +1900,7 @@ function saveAttendanceRecord(status, container) {
   record.staffName = staff.name;
   record.status = status === "absent" ? "absent" : "present";
   record.employeeSignature = employeeSignature;
-  record.managerSignature = getSignaturePadData(container.querySelector("#managerSignaturePad"));
+  if (record.status === "absent") record.managerSignature = "";
   record.scheduledStart = scheduledStart;
   record.scheduledEnd = scheduledEnd;
   record.actualStart = record.status === "present" ? actualStart : "";
@@ -1902,6 +1908,46 @@ function saveAttendanceRecord(status, container) {
   record.adjustmentReason = container.querySelector("#attendanceAdjustmentReason")?.value.trim() || "";
   record.recordedAt = record.recordedAt || updatedAt;
   record.updatedAt = updatedAt;
+  saveDb();
+  renderAttendanceScreen();
+}
+
+function confirmManagerAttendance(container) {
+  const staff = getStaffMember(state.selectedAttendanceStaffId);
+  if (!staff) {
+    alert("근무자 이름을 먼저 선택해주세요.");
+    return;
+  }
+  const record = getAttendanceRecord(getSelectedAttendanceDate(), staff.id);
+  if (!record || record.status !== "present") {
+    alert("출근 기록을 먼저 저장해주세요.");
+    return;
+  }
+  const managerSignature = getSignaturePadData(container.querySelector("#managerSignaturePad"));
+  if (!managerSignature) {
+    alert("매니저 서명을 입력한 뒤 확인해주세요.");
+    return;
+  }
+
+  record.staffName = staff.name;
+  record.managerSignature = managerSignature;
+  record.updatedAt = nowIso();
+  saveDb();
+  renderAttendanceScreen();
+}
+
+function deleteAttendanceRecord() {
+  const staff = getStaffMember(state.selectedAttendanceStaffId);
+  if (!staff) {
+    alert("근무자 이름을 먼저 선택해주세요.");
+    return;
+  }
+  const date = getSelectedAttendanceDate();
+  const record = getAttendanceRecord(date, staff.id);
+  if (!record) return;
+  if (!confirm(`${staff.name} ${formatAttendanceDate(date)} 근퇴 기록을 삭제할까요?`)) return;
+
+  db.operations.attendanceRecords = (db.operations.attendanceRecords || []).filter((item) => item.id !== record.id);
   saveDb();
   renderAttendanceScreen();
 }
@@ -1953,7 +1999,7 @@ function attendanceStatusLabel(status) {
 function renderAttendanceCalendarChip(record) {
   const timingText = attendanceTimingSummary(record);
   return `
-    <span class="attendance-chip ${record.status === "present" ? "is-present" : "is-absent"} ${isSignedPresentRecord(record) ? "is-signed" : ""} ${attendanceTimingClass(record)}">
+    <span class="attendance-chip ${attendanceRecordStateClass(record)} ${isSignedPresentRecord(record) ? "is-signed" : ""} ${attendanceTimingClass(record)}">
       <span class="attendance-chip-text">${escapeHtml(record.staffName)} ${attendanceStatusLabel(record.status)}</span>
       ${
         isSignedPresentRecord(record)
@@ -1973,8 +2019,18 @@ function isSignedPresentRecord(record) {
   return record?.status === "present" && Boolean(record.employeeSignature) && Boolean(record.managerSignature);
 }
 
+function attendanceRecordStateClass(record) {
+  if (record?.status === "absent") return "is-absent";
+  return isSignedPresentRecord(record) ? "is-present" : "is-pending-confirmation";
+}
+
 function attendanceRecordStatusText(record) {
-  const baseText = isSignedPresentRecord(record) ? "서명완료 출근" : attendanceStatusLabel(record?.status);
+  const baseText =
+    record?.status === "present"
+      ? isSignedPresentRecord(record)
+        ? "출근 확인 완료"
+        : "출근 확인 대기"
+      : attendanceStatusLabel(record?.status);
   const timingText = attendanceTimingSummary(record);
   return timingText ? `${baseText} ${timingText}` : baseText;
 }

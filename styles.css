@@ -1519,6 +1519,13 @@ th {
   font-weight: 900;
 }
 
+.signature-button-group {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .signature-heading .button.is-confirming {
   background: var(--red-soft);
   color: var(--red);
@@ -1556,6 +1563,12 @@ th {
 .attendance-chip.is-present {
   background: var(--green-soft);
   color: var(--green);
+}
+
+.attendance-current-status.is-pending-confirmation,
+.attendance-chip.is-pending-confirmation {
+  background: #eef1f3;
+  color: #5f6b76;
 }
 
 .attendance-chip.is-signed {
