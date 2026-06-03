@@ -1302,35 +1302,69 @@ th {
 
 .staff-schedule-admin {
   display: grid;
-  gap: 8px;
+  gap: 10px;
 }
 
 .staff-schedule-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text);
+  font-weight: 900;
+}
+
+.staff-schedule-title small {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.staff-schedule-table {
+  display: grid;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fbfcfd;
+}
+
+.staff-schedule-header,
+.staff-schedule-row {
+  display: grid;
+  grid-template-columns: minmax(92px, 0.7fr) minmax(120px, 1fr) minmax(120px, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+}
+
+.staff-schedule-header {
+  background: var(--surface-strong);
   color: var(--muted);
   font-size: 14px;
   font-weight: 900;
 }
 
-.staff-schedule-grid {
-  display: grid;
-  grid-template-columns: repeat(7, minmax(92px, 1fr));
+.staff-schedule-row + .staff-schedule-row {
+  border-top: 1px solid var(--line);
+}
+
+.staff-day-toggle {
+  display: inline-flex;
+  align-items: center;
   gap: 8px;
+  font-weight: 900;
 }
 
-.staff-schedule-day {
-  min-width: 0;
-  display: grid;
-  gap: 6px;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fbfcfd;
+.staff-day-toggle input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--teal);
 }
 
-.staff-schedule-day input[type="time"] {
-  min-height: 36px;
-  padding: 6px;
-  font-size: 14px;
+.staff-time-input {
+  min-height: 42px;
+  padding: 8px 10px;
+  font-size: 16px;
 }
 
 .checklist-list {
@@ -2036,7 +2070,6 @@ th {
   .ops-body,
   .ops-card--summary,
   .attendance-body,
-  .staff-schedule-grid,
   .handover-form,
   .alarm-admin-panel,
   .alarm-form-grid,
@@ -2110,7 +2143,8 @@ th {
     .checklist-item,
     .staff-admin-row,
     .staff-admin-main,
-    .staff-schedule-grid,
+    .staff-schedule-header,
+    .staff-schedule-row,
     .handover-item,
     .compact-list li {
     grid-template-columns: 1fr;

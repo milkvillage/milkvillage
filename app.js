@@ -2654,19 +2654,27 @@ function renderStaffScheduleAdmin(staff) {
   const schedule = normalizeStaffSchedule(staff.schedule);
   return `
     <div class="staff-schedule-admin" aria-label="${escapeAttr(staff.name)} 기본 근무시간">
-      <div class="staff-schedule-title">기본 근무시간</div>
-      <div class="staff-schedule-grid">
+      <div class="staff-schedule-title">
+        <span>기본 근무시간</span>
+        <small>근무 요일만 체크하고 시간을 입력하세요.</small>
+      </div>
+      <div class="staff-schedule-table">
+        <div class="staff-schedule-header">
+          <span>요일</span>
+          <span>시작</span>
+          <span>종료</span>
+        </div>
         ${staffScheduleDayOrder
           .map((dayKey) => {
             const day = schedule[dayKey];
             return `
-              <div class="staff-schedule-day">
-                <label class="check-field">
+              <div class="staff-schedule-row">
+                <label class="staff-day-toggle">
                   <input data-staff-schedule-enabled="${staff.id}:${dayKey}" type="checkbox" ${day.enabled ? "checked" : ""} />
                   ${staffScheduleDayLabels[dayKey]}
                 </label>
-                <input data-staff-schedule-start="${staff.id}:${dayKey}" type="time" value="${escapeAttr(day.startTime)}" aria-label="${staffScheduleDayLabels[dayKey]} 시작" />
-                <input data-staff-schedule-end="${staff.id}:${dayKey}" type="time" value="${escapeAttr(day.endTime)}" aria-label="${staffScheduleDayLabels[dayKey]} 종료" />
+                <input class="staff-time-input" data-staff-schedule-start="${staff.id}:${dayKey}" type="time" value="${escapeAttr(day.startTime)}" aria-label="${staffScheduleDayLabels[dayKey]} 시작" />
+                <input class="staff-time-input" data-staff-schedule-end="${staff.id}:${dayKey}" type="time" value="${escapeAttr(day.endTime)}" aria-label="${staffScheduleDayLabels[dayKey]} 종료" />
               </div>
             `;
           })
