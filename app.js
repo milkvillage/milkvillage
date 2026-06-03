@@ -14,6 +14,16 @@ const alarmDayLabels = {
   sat: "토",
   sun: "일",
 };
+const staffScheduleDayOrder = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+const staffScheduleDayLabels = {
+  mon: "월",
+  tue: "화",
+  wed: "수",
+  thu: "목",
+  fri: "금",
+  sat: "토",
+  sun: "일",
+};
 const LOG_RETENTION_DAYS = {
   alarmEventLogs: 30,
   inventoryTransactions: 90,
@@ -195,6 +205,33 @@ function localTimeValue(date = new Date()) {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
+function normalizeTimeValue(value) {
+  const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return "";
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return "";
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function timeToMinutes(value) {
+  const normalized = normalizeTimeValue(value);
+  if (!normalized) return null;
+  const [hour, minute] = normalized.split(":").map(Number);
+  return hour * 60 + minute;
+}
+
+function minutesBetween(startTime, endTime) {
+  const start = timeToMinutes(startTime);
+  const end = timeToMinutes(endTime);
+  if (start === null || end === null) return null;
+  return end >= start ? end - start : end + 24 * 60 - start;
+}
+
+function formatTimeRange(startTime, endTime) {
+  return startTime && endTime ? `${startTime}-${endTime}` : "예정 없음";
+}
+
 function saveDb() {
   pruneExpiredLogs();
   if (!applyingRemoteState) markDbChanged();
@@ -364,11 +401,26 @@ function normalizeHandoverNote(note) {
   };
 }
 
+function normalizeStaffSchedule(schedule = {}) {
+  return dayKeys.reduce((result, dayKey) => {
+    const item = schedule?.[dayKey] || {};
+    const startTime = normalizeTimeValue(item.startTime || item.start || "");
+    const endTime = normalizeTimeValue(item.endTime || item.end || "");
+    result[dayKey] = {
+      enabled: Boolean(item.enabled) && Boolean(startTime && endTime),
+      startTime,
+      endTime,
+    };
+    return result;
+  }, {});
+}
+
 function normalizeStaffMember(staff, index = 0) {
   return {
     id: staff?.id || uid("staff"),
     name: staff?.name || "근무자",
     isActive: staff?.isActive !== false,
+    schedule: normalizeStaffSchedule(staff?.schedule),
     sortOrder: Number.isFinite(Number(staff?.sortOrder)) ? Number(staff.sortOrder) : index + 1,
     createdAt: staff?.createdAt || nowIso(),
     updatedAt: staff?.updatedAt || staff?.createdAt || nowIso(),
@@ -385,6 +437,11 @@ function normalizeAttendanceRecord(record) {
     status,
     employeeSignature: record?.employeeSignature || "",
     managerSignature: record?.managerSignature || "",
+    scheduledStart: normalizeTimeValue(record?.scheduledStart),
+    scheduledEnd: normalizeTimeValue(record?.scheduledEnd),
+    actualStart: normalizeTimeValue(record?.actualStart),
+    actualEnd: normalizeTimeValue(record?.actualEnd),
+    adjustmentReason: record?.adjustmentReason || "",
     recordedAt: record?.recordedAt || record?.updatedAt || nowIso(),
     updatedAt: record?.updatedAt || record?.recordedAt || nowIso(),
   };
@@ -1074,6 +1131,34 @@ function getStaffMember(staffId) {
   return (db.operations?.staffMembers || []).find((staff) => staff.id === staffId);
 }
 
+function getWeekdayKeyFromDate(dateKey) {
+  const [year, month, date] = String(dateKey || "").split("-").map(Number);
+  if (!year || !month || !date) return dayKeys[new Date().getDay()];
+  return dayKeys[new Date(year, month - 1, date).getDay()];
+}
+
+function getStaffScheduleForDate(staff, dateKey) {
+  const dayKey = getWeekdayKeyFromDate(dateKey);
+  const schedule = staff?.schedule?.[dayKey];
+  if (!schedule?.enabled || !schedule.startTime || !schedule.endTime) {
+    return { dayKey, startTime: "", endTime: "" };
+  }
+  return { dayKey, startTime: schedule.startTime, endTime: schedule.endTime };
+}
+
+function getAttendanceTimingValues(staff, dateKey, record = null) {
+  const schedule = getStaffScheduleForDate(staff, dateKey);
+  const scheduledStart = record?.scheduledStart || schedule.startTime || "";
+  const scheduledEnd = record?.scheduledEnd || schedule.endTime || "";
+  return {
+    scheduledStart,
+    scheduledEnd,
+    actualStart: record?.actualStart || scheduledStart,
+    actualEnd: record?.actualEnd || scheduledEnd,
+    adjustmentReason: record?.adjustmentReason || "",
+  };
+}
+
 function getAttendanceRecordsForMonth(monthKey = state.attendanceMonth) {
   return (db.operations?.attendanceRecords || [])
     .filter((record) => String(record.date || "").startsWith(monthKey))
@@ -1635,6 +1720,7 @@ function renderAttendanceScreen() {
   const selectedStaff = staffMembers.find((staff) => staff.id === state.selectedAttendanceStaffId) || null;
   const selectedDate = getSelectedAttendanceDate();
   const selectedRecord = selectedStaff ? getAttendanceRecord(selectedDate, selectedStaff.id) : null;
+  const timingValues = getAttendanceTimingValues(selectedStaff, selectedDate, selectedRecord);
 
   els.workArea.innerHTML = `
     <section class="attendance-screen" aria-label="근퇴기록">
@@ -1663,6 +1749,34 @@ function renderAttendanceScreen() {
               </select>
             </label>
           </div>
+          <section class="attendance-time-panel">
+            <div class="attendance-time-heading">
+              <strong>근무시간</strong>
+              <span>${selectedRecord ? attendanceTimingSummary(selectedRecord) || "시간 기록 없음" : formatTimeRange(timingValues.scheduledStart, timingValues.scheduledEnd)}</span>
+            </div>
+            <div class="attendance-time-grid">
+              <label class="field">
+                <span>예정 시작</span>
+                <input id="attendanceScheduledStart" type="time" value="${escapeAttr(timingValues.scheduledStart)}" />
+              </label>
+              <label class="field">
+                <span>예정 종료</span>
+                <input id="attendanceScheduledEnd" type="time" value="${escapeAttr(timingValues.scheduledEnd)}" />
+              </label>
+              <label class="field">
+                <span>실제 출근</span>
+                <input id="attendanceActualStart" type="time" value="${escapeAttr(timingValues.actualStart)}" />
+              </label>
+              <label class="field">
+                <span>실제 퇴근</span>
+                <input id="attendanceActualEnd" type="time" value="${escapeAttr(timingValues.actualEnd)}" />
+              </label>
+            </div>
+            <label class="field">
+              <span>변경 사유</span>
+              <input id="attendanceAdjustmentReason" type="text" value="${escapeAttr(timingValues.adjustmentReason)}" placeholder="예: 피크타임 연장, 조기 마감, 개인 사정" />
+            </label>
+          </section>
           <div class="signature-section">
             <div class="signature-card">
               <div class="signature-heading">
@@ -1746,6 +1860,15 @@ function saveAttendanceRecord(status, container) {
     return;
   }
 
+  const scheduledStart = normalizeTimeValue(container.querySelector("#attendanceScheduledStart")?.value);
+  const scheduledEnd = normalizeTimeValue(container.querySelector("#attendanceScheduledEnd")?.value);
+  const actualStart = normalizeTimeValue(container.querySelector("#attendanceActualStart")?.value);
+  const actualEnd = normalizeTimeValue(container.querySelector("#attendanceActualEnd")?.value);
+  if (status === "present" && (!actualStart || !actualEnd)) {
+    alert("실제 출근/퇴근 시간을 입력해주세요.");
+    return;
+  }
+
   const selectedDate = getSelectedAttendanceDate();
   const updatedAt = nowIso();
   let record = getAttendanceRecord(selectedDate, staff.id);
@@ -1758,6 +1881,11 @@ function saveAttendanceRecord(status, container) {
       status: "present",
       employeeSignature: "",
       managerSignature: "",
+      scheduledStart: "",
+      scheduledEnd: "",
+      actualStart: "",
+      actualEnd: "",
+      adjustmentReason: "",
       recordedAt: updatedAt,
       updatedAt,
     };
@@ -1767,6 +1895,11 @@ function saveAttendanceRecord(status, container) {
   record.status = status === "absent" ? "absent" : "present";
   record.employeeSignature = employeeSignature;
   record.managerSignature = getSignaturePadData(container.querySelector("#managerSignaturePad"));
+  record.scheduledStart = scheduledStart;
+  record.scheduledEnd = scheduledEnd;
+  record.actualStart = record.status === "present" ? actualStart : "";
+  record.actualEnd = record.status === "present" ? actualEnd : "";
+  record.adjustmentReason = container.querySelector("#attendanceAdjustmentReason")?.value.trim() || "";
   record.recordedAt = record.recordedAt || updatedAt;
   record.updatedAt = updatedAt;
   saveDb();
@@ -1799,7 +1932,7 @@ function renderAttendanceCalendar(monthKey) {
               ? records
                   .map(
                     (record) => `
-                      <span class="attendance-chip ${record.status === "present" ? "is-present" : "is-absent"} ${isSignedPresentRecord(record) ? "is-signed" : ""}">
+                      <span class="attendance-chip ${record.status === "present" ? "is-present" : "is-absent"} ${isSignedPresentRecord(record) ? "is-signed" : ""} ${attendanceTimingClass(record)}">
                         ${escapeHtml(record.staffName)} ${attendanceRecordStatusText(record)}
                       </span>
                     `,
@@ -1828,7 +1961,39 @@ function isSignedPresentRecord(record) {
 }
 
 function attendanceRecordStatusText(record) {
-  return isSignedPresentRecord(record) ? "서명완료 출근" : attendanceStatusLabel(record?.status);
+  const baseText = isSignedPresentRecord(record) ? "서명완료 출근" : attendanceStatusLabel(record?.status);
+  const timingText = attendanceTimingSummary(record);
+  return timingText ? `${baseText} ${timingText}` : baseText;
+}
+
+function attendanceTimingDeltaMinutes(record) {
+  if (record?.status !== "present") return null;
+  const scheduledMinutes = minutesBetween(record.scheduledStart, record.scheduledEnd);
+  const actualMinutes = minutesBetween(record.actualStart, record.actualEnd);
+  if (scheduledMinutes === null || actualMinutes === null) return null;
+  return actualMinutes - scheduledMinutes;
+}
+
+function attendanceTimingSummary(record) {
+  const delta = attendanceTimingDeltaMinutes(record);
+  if (delta === null) return "";
+  if (Math.abs(delta) < 1) return "정상";
+  const prefix = delta > 0 ? "+" : "-";
+  return `${prefix}${formatDurationShort(Math.abs(delta))}`;
+}
+
+function attendanceTimingClass(record) {
+  const delta = attendanceTimingDeltaMinutes(record);
+  if (delta === null || Math.abs(delta) < 1) return "is-normal-time";
+  return delta > 0 ? "is-overtime" : "is-undertime";
+}
+
+function formatDurationShort(totalMinutes) {
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours && minutes) return `${hours}h${minutes}m`;
+  if (hours) return `${hours}h`;
+  return `${minutes}m`;
 }
 
 function formatAttendanceMonth(monthKey) {
@@ -2386,19 +2551,22 @@ function renderStaffMembersAdmin() {
                 .map(
                   (staff) => `
                     <div class="staff-admin-row">
-                      <label class="field">
-                        <span>이름</span>
-                        <input data-staff-name="${staff.id}" type="text" value="${escapeAttr(staff.name)}" />
-                      </label>
-                      <label class="check-field">
-                        <input data-staff-active="${staff.id}" type="checkbox" ${staff.isActive ? "checked" : ""} />
-                        사용
-                      </label>
-                      <button class="icon-button" data-delete-staff="${staff.id}" type="button" aria-label="${escapeAttr(staff.name)} 삭제">
-                        <span class="icon" aria-hidden="true">
-                          <svg viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M6 7l1 14h10l1-14"/><path d="M9 7V4h6v3"/></svg>
-                        </span>
-                      </button>
+                      <div class="staff-admin-main">
+                        <label class="field">
+                          <span>이름</span>
+                          <input data-staff-name="${staff.id}" type="text" value="${escapeAttr(staff.name)}" />
+                        </label>
+                        <label class="check-field">
+                          <input data-staff-active="${staff.id}" type="checkbox" ${staff.isActive ? "checked" : ""} />
+                          사용
+                        </label>
+                        <button class="icon-button" data-delete-staff="${staff.id}" type="button" aria-label="${escapeAttr(staff.name)} 삭제">
+                          <span class="icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M6 7l1 14h10l1-14"/><path d="M9 7V4h6v3"/></svg>
+                          </span>
+                        </button>
+                      </div>
+                      ${renderStaffScheduleAdmin(staff)}
                     </div>
                   `,
                 )
@@ -2410,6 +2578,32 @@ function renderStaffMembersAdmin() {
         <button class="button button--primary" id="saveStaffMembers" type="button">근무자 저장</button>
       </div>
     </section>
+  `;
+}
+
+function renderStaffScheduleAdmin(staff) {
+  const schedule = normalizeStaffSchedule(staff.schedule);
+  return `
+    <div class="staff-schedule-admin" aria-label="${escapeAttr(staff.name)} 기본 근무시간">
+      <div class="staff-schedule-title">기본 근무시간</div>
+      <div class="staff-schedule-grid">
+        ${staffScheduleDayOrder
+          .map((dayKey) => {
+            const day = schedule[dayKey];
+            return `
+              <div class="staff-schedule-day">
+                <label class="check-field">
+                  <input data-staff-schedule-enabled="${staff.id}:${dayKey}" type="checkbox" ${day.enabled ? "checked" : ""} />
+                  ${staffScheduleDayLabels[dayKey]}
+                </label>
+                <input data-staff-schedule-start="${staff.id}:${dayKey}" type="time" value="${escapeAttr(day.startTime)}" aria-label="${staffScheduleDayLabels[dayKey]} 시작" />
+                <input data-staff-schedule-end="${staff.id}:${dayKey}" type="time" value="${escapeAttr(day.endTime)}" aria-label="${staffScheduleDayLabels[dayKey]} 종료" />
+              </div>
+            `;
+          })
+          .join("")}
+      </div>
+    </div>
   `;
 }
 
@@ -2580,6 +2774,17 @@ function applyStaffMembersAdminValues(container) {
     if (!nameInput) return;
     staff.name = nameInput.value.trim() || staff.name;
     staff.isActive = Boolean(container.querySelector(`[data-staff-active="${staff.id}"]`)?.checked);
+    staff.schedule = staffScheduleDayOrder.reduce((schedule, dayKey) => {
+      const key = `${staff.id}:${dayKey}`;
+      const startTime = normalizeTimeValue(container.querySelector(`[data-staff-schedule-start="${key}"]`)?.value);
+      const endTime = normalizeTimeValue(container.querySelector(`[data-staff-schedule-end="${key}"]`)?.value);
+      schedule[dayKey] = {
+        enabled: Boolean(container.querySelector(`[data-staff-schedule-enabled="${key}"]`)?.checked) && Boolean(startTime && endTime),
+        startTime,
+        endTime,
+      };
+      return schedule;
+    }, {});
     staff.updatedAt = updatedAt;
   });
 }
@@ -2591,6 +2796,7 @@ function addStaffMember(container) {
     id: uid("staff"),
     name: "새 근무자",
     isActive: true,
+    schedule: normalizeStaffSchedule(),
     sortOrder: getStaffMembersForAdmin().length + 1,
     createdAt,
     updatedAt: createdAt,

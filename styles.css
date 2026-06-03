@@ -1286,13 +1286,51 @@ th {
 
 .staff-admin-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) auto auto;
-  gap: 10px;
-  align-items: end;
+  gap: 14px;
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
+}
+
+.staff-admin-main {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.staff-schedule-admin {
+  display: grid;
+  gap: 8px;
+}
+
+.staff-schedule-title {
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.staff-schedule-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(92px, 1fr));
+  gap: 8px;
+}
+
+.staff-schedule-day {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.staff-schedule-day input[type="time"] {
+  min-height: 36px;
+  padding: 6px;
+  font-size: 14px;
 }
 
 .checklist-list {
@@ -1428,6 +1466,39 @@ th {
   gap: 12px;
 }
 
+.attendance-time-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f7fafb;
+}
+
+.attendance-time-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-weight: 900;
+}
+
+.attendance-time-heading span {
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: #e7edf0;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.attendance-time-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
 .signature-section {
   display: grid;
   gap: 12px;
@@ -1489,6 +1560,14 @@ th {
 
 .attendance-chip.is-signed {
   box-shadow: inset 0 0 0 2px var(--green);
+}
+
+.attendance-chip.is-overtime {
+  border-left: 4px solid #b7791f;
+}
+
+.attendance-chip.is-undertime {
+  border-left: 4px solid var(--red);
 }
 
 .attendance-current-status.is-absent,
@@ -1907,6 +1986,7 @@ th {
   .ops-body,
   .ops-card--summary,
   .attendance-body,
+  .staff-schedule-grid,
   .handover-form,
   .alarm-admin-panel,
   .alarm-form-grid,
@@ -1974,10 +2054,13 @@ th {
     .form-grid,
     .dense-grid,
     .ingredient-row,
+    .attendance-time-grid,
     .alarm-row,
     .analysis-summary,
     .checklist-item,
     .staff-admin-row,
+    .staff-admin-main,
+    .staff-schedule-grid,
     .handover-item,
     .compact-list li {
     grid-template-columns: 1fr;
