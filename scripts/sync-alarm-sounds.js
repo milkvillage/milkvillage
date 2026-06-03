@@ -5,6 +5,7 @@ const path = require("node:path");
 const repoRoot = path.resolve(__dirname, "..");
 const defaultEnvPath = path.join(repoRoot, ".env.local");
 const statePath = path.join(__dirname, ".alarm-sound-sync-state.json");
+const DEFAULT_PUBLISHABLE_KEY = "sb_publishable_KLXkL3WkYQXTTUsdE9WZJw_Vw63SWtM";
 
 loadEnvFile(defaultEnvPath);
 loadEnvFile(path.join(process.env.APPDATA || "", "MilkVillage", "alarm-sound-sync.env"));
@@ -12,6 +13,7 @@ loadEnvFile(path.join(process.env.APPDATA || "", "MilkVillage", "alarm-sound-syn
 const config = {
   supabaseUrl: readRequiredEnv("SUPABASE_URL"),
   serviceRoleKey: readRequiredEnv("SUPABASE_SERVICE_ROLE_KEY"),
+  stateAccessKey: process.env.SUPABASE_STATE_ACCESS_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || DEFAULT_PUBLISHABLE_KEY,
   bucket: process.env.SUPABASE_STORAGE_BUCKET || "alarm-sounds",
   table: process.env.SUPABASE_STATE_TABLE || "milk_village_state",
   stateId: process.env.SUPABASE_STATE_ID || "main",
@@ -132,7 +134,7 @@ async function uploadMp3(fullPath, objectName) {
   const response = await fetch(`${config.supabaseUrl}/storage/v1/object/${config.bucket}/${encodePathSegment(objectName)}`, {
     method: "POST",
     headers: {
-      apikey: config.serviceRoleKey,
+      apikey: config.stateAccessKey,
       Authorization: `Bearer ${config.serviceRoleKey}`,
       "Content-Type": "audio/mpeg",
       "x-upsert": "true",
@@ -148,11 +150,7 @@ async function uploadMp3(fullPath, objectName) {
 async function fetchRemoteState() {
   const url = `${config.supabaseUrl}/rest/v1/${config.table}?id=eq.${encodeURIComponent(config.stateId)}&select=data,updated_at`;
   const response = await fetch(url, {
-    headers: {
-      apikey: config.serviceRoleKey,
-      Authorization: `Bearer ${config.serviceRoleKey}`,
-      Accept: "application/json",
-    },
+    headers: makeApiHeaders(config.stateAccessKey, { Accept: "application/json" }),
   });
   if (!response.ok) {
     const body = await response.text();
@@ -169,11 +167,7 @@ async function fetchRemoteState() {
 async function updateRemoteState(data, updatedAt) {
   const response = await fetch(`${config.supabaseUrl}/rest/v1/${config.table}?id=eq.${encodeURIComponent(config.stateId)}`, {
     method: "PATCH",
-    headers: {
-      apikey: config.serviceRoleKey,
-      Authorization: `Bearer ${config.serviceRoleKey}`,
-      "Content-Type": "application/json",
-    },
+    headers: makeApiHeaders(config.stateAccessKey, { "Content-Type": "application/json" }),
     body: JSON.stringify({
       data,
       updated_at: updatedAt,
@@ -197,6 +191,17 @@ function loadEnvFile(filePath) {
     const value = trimmed.slice(eqIndex + 1).trim().replace(/^"|"$/g, "");
     if (key && !process.env[key]) process.env[key] = value;
   });
+}
+
+function makeApiHeaders(accessKey, extraHeaders = {}) {
+  const headers = {
+    apikey: accessKey,
+    ...extraHeaders,
+  };
+  if (String(accessKey || "").split(".").length === 3) {
+    headers.Authorization = `Bearer ${accessKey}`;
+  }
+  return headers;
 }
 
 function readRequiredEnv(key) {

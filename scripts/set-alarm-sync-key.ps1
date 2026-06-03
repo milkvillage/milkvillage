@@ -17,6 +17,7 @@ if ([string]::IsNullOrWhiteSpace($ServiceRoleKey)) {
 
 @"
 SUPABASE_URL=https://irfalbrkahcouaugbqwj.supabase.co
+SUPABASE_PUBLISHABLE_KEY=sb_publishable_KLXkL3WkYQXTTUsdE9WZJw_Vw63SWtM
 SUPABASE_SERVICE_ROLE_KEY=$ServiceRoleKey
 SUPABASE_STORAGE_BUCKET=alarm-sounds
 SUPABASE_STATE_TABLE=milk_village_state
