@@ -791,6 +791,12 @@ th {
   resize: vertical;
 }
 
+.field input[readonly] {
+  background: #eef2f4;
+  color: var(--muted);
+  cursor: default;
+}
+
 .field input::placeholder,
 .field textarea::placeholder {
   color: #9aa8ad;

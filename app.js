@@ -272,7 +272,7 @@ function normalizeDb(nextDb) {
       ? nextDb.supplies.map(normalizeSupply).sort((a, b) => a.sortOrder - b.sortOrder)
       : fallback.supplies,
     recipes: Array.isArray(nextDb?.recipes) ? nextDb.recipes.map(normalizeRecipe) : fallback.recipes,
-    recipeVariants: Array.isArray(nextDb?.recipeVariants) ? nextDb.recipeVariants : fallback.recipeVariants,
+    recipeVariants: Array.isArray(nextDb?.recipeVariants) ? nextDb.recipeVariants.map(normalizeRecipeVariant) : fallback.recipeVariants,
     recipeVariantIngredients: Array.isArray(nextDb?.recipeVariantIngredients)
       ? nextDb.recipeVariantIngredients
       : fallback.recipeVariantIngredients,
@@ -385,6 +385,18 @@ function normalizeRecipe(recipe, index = 0) {
     ...recipe,
     sortOrder: Number.isFinite(sortOrder) ? sortOrder : index + 1,
     updatedAt: recipe?.updatedAt || recipe?.createdAt || nowIso(),
+  };
+}
+
+function normalizeRecipeVariant(variant, index = 0) {
+  const multiplier = Number(variant?.multiplier || 1);
+  const sortOrder = Number(variant?.sortOrder);
+  return {
+    ...variant,
+    multiplier: Number.isFinite(multiplier) ? multiplier : 1,
+    label: getVariantLabelFromMultiplier(Number.isFinite(multiplier) ? multiplier : 1),
+    sortOrder: Number.isFinite(sortOrder) ? sortOrder : index + 1,
+    updatedAt: variant?.updatedAt || variant?.createdAt || nowIso(),
   };
 }
 
@@ -2098,7 +2110,7 @@ function renderRecipeAdmin(container) {
             .map(
               (item) => `
                 <button class="list-button ${item.id === variant?.id ? "is-active" : ""}" type="button" data-select-variant="${item.id}">
-                  ${escapeHtml(item.label)}${item.isActive ? "" : " (비활성)"}
+                  ${escapeHtml(getVariantLabelFromMultiplier(item.multiplier))}${item.isActive ? "" : " (비활성)"}
                 </button>
               `,
             )
@@ -2141,7 +2153,7 @@ function renderRecipeAdmin(container) {
                 <div class="dense-grid">
                   <label class="field">
                     <span>배수명</span>
-                    <input id="variantLabel" type="text" value="${escapeAttr(variant.label)}" />
+                    <input id="variantLabel" type="text" value="${escapeAttr(getVariantLabelFromMultiplier(variant.multiplier))}" readonly />
                   </label>
                   <label class="field">
                     <span>배수값</span>
@@ -2228,9 +2240,15 @@ function formatQuantityInputValue(value) {
   return Number.isInteger(normalized) ? String(normalized) : String(normalized).replace(/0+$/, "").replace(/\.$/, "");
 }
 
+function getVariantLabelFromMultiplier(multiplier) {
+  return `x${formatQuantityInputValue(multiplier || 1)}`;
+}
+
 function updateVariantIngredientQuantityPreview(container) {
   const multiplier = Number(container.querySelector("#variantMultiplier")?.value || 0);
   if (!Number.isFinite(multiplier)) return;
+  const labelInput = container.querySelector("#variantLabel");
+  if (labelInput) labelInput.value = getVariantLabelFromMultiplier(multiplier);
   container.querySelectorAll("[data-ingredient-base-qty]").forEach((input) => {
     const baseQty = Number(input.dataset.ingredientBaseQty || 0);
     input.value = formatQuantityInputValue(baseQty * multiplier);
@@ -2376,7 +2394,7 @@ function addVariant(container) {
   const variant = {
     id: uid("variant"),
     recipeId: state.selectedRecipeId,
-    label: `x${variants.length + 1}`,
+    label: getVariantLabelFromMultiplier(variants.length + 1),
     multiplier: variants.length + 1,
     sortOrder: variants.length + 1,
     isActive: true,
@@ -2399,7 +2417,7 @@ function cloneVariant(container) {
   const variant = {
     ...source,
     id: uid("variant"),
-    label: `${source.label} 복제`,
+    label: getVariantLabelFromMultiplier(source.multiplier),
     sortOrder: variants.length + 1,
     createdAt,
     updatedAt: createdAt,
@@ -2469,8 +2487,9 @@ function applyRecipeAdminFormValues(container) {
     recipe.updatedAt = now;
   }
   if (variant) {
-    variant.label = container.querySelector("#variantLabel")?.value.trim() || variant.label;
-    variant.multiplier = Number(container.querySelector("#variantMultiplier")?.value || variant.multiplier);
+    const multiplier = Number(container.querySelector("#variantMultiplier")?.value || variant.multiplier);
+    variant.multiplier = Number.isFinite(multiplier) ? multiplier : variant.multiplier;
+    variant.label = getVariantLabelFromMultiplier(variant.multiplier);
     variant.sortOrder = Number(container.querySelector("#variantSort")?.value || variant.sortOrder);
     variant.isActive = Boolean(container.querySelector("#variantActive")?.checked);
     variant.updatedAt = now;
