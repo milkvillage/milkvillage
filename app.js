@@ -1930,13 +1930,7 @@ function renderAttendanceCalendar(monthKey) {
           ${
             records.length
               ? records
-                  .map(
-                    (record) => `
-                      <span class="attendance-chip ${record.status === "present" ? "is-present" : "is-absent"} ${isSignedPresentRecord(record) ? "is-signed" : ""} ${attendanceTimingClass(record)}">
-                        ${escapeHtml(record.staffName)} ${attendanceRecordStatusText(record)}
-                      </span>
-                    `,
-                  )
+                  .map(renderAttendanceCalendarChip)
                   .join("")
               : ""
           }
@@ -1954,6 +1948,25 @@ function renderAttendanceCalendar(monthKey) {
 
 function attendanceStatusLabel(status) {
   return status === "absent" ? "결근" : "출근";
+}
+
+function renderAttendanceCalendarChip(record) {
+  const timingText = attendanceTimingSummary(record);
+  return `
+    <span class="attendance-chip ${record.status === "present" ? "is-present" : "is-absent"} ${isSignedPresentRecord(record) ? "is-signed" : ""} ${attendanceTimingClass(record)}">
+      <span class="attendance-chip-text">${escapeHtml(record.staffName)} ${attendanceStatusLabel(record.status)}</span>
+      ${
+        isSignedPresentRecord(record)
+          ? `<span class="attendance-signature-icon" title="서명 완료" aria-label="서명 완료">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 13.5 9.2 17 19 7"/>
+              </svg>
+            </span>`
+          : ""
+      }
+      ${timingText && timingText !== "정상" ? `<span class="attendance-time-badge">${escapeHtml(timingText)}</span>` : ""}
+    </span>
+  `;
 }
 
 function isSignedPresentRecord(record) {

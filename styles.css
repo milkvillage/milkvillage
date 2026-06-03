@@ -1666,14 +1666,51 @@ th {
 
 .attendance-chip {
   min-width: 0;
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   padding: 4px 6px;
   border-radius: 8px;
   font-size: 12px;
   font-weight: 900;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.attendance-chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.attendance-signature-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--green);
+  color: #fff;
+}
+
+.attendance-signature-icon svg {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.attendance-time-badge {
+  flex: 0 0 auto;
+  padding: 1px 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.75);
+  font-size: 10px;
+  line-height: 1.2;
 }
 
 .manager-summary-grid {
