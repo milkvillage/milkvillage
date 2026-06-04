@@ -147,6 +147,9 @@ let remoteChannel = null;
 let remotePollTimer = null;
 let lastRemoteUpdatedAt = "";
 let localRevisionAt = "";
+let remoteInitialSyncDone = !supabaseClient;
+let remoteResumeSyncInFlight = false;
+let remoteResumeSyncPromise = null;
 let pendingSpeech = null;
 let alarmSpeechLoopTimer = null;
 let alarmSpeechRetryTimer = null;
@@ -748,7 +751,9 @@ function setRemoteStatus(text, status = "") {
 
 async function initRemoteSync() {
   if (!supabaseClient) {
+    remoteInitialSyncDone = true;
     setRemoteStatus("로컬 저장", "");
+    checkAlarms();
     return;
   }
 
@@ -758,11 +763,15 @@ async function initRemoteSync() {
     if (!hasRemoteState) await saveRemoteNow();
     subscribeRemoteChanges();
     startRemotePolling();
+    remoteInitialSyncDone = true;
     setRemoteStatus("DB 연결됨", "online");
+    checkAlarms();
   } catch (error) {
     applyingRemoteState = false;
+    remoteInitialSyncDone = true;
     console.error(error);
     setRemoteStatus("DB 설정 필요", "error");
+    checkAlarms();
   }
 }
 
@@ -773,6 +782,29 @@ async function fetchRemoteState({ force = false, source = "poll" } = {}) {
   if (!data?.data) return false;
   applyRemoteState(data, { force, source });
   return true;
+}
+
+function syncRemoteBeforeAlarmCheck(source = "resume") {
+  if (!supabaseClient) {
+    checkAlarms();
+    return Promise.resolve(false);
+  }
+  if (remoteResumeSyncPromise) return remoteResumeSyncPromise;
+
+  remoteResumeSyncInFlight = true;
+  remoteResumeSyncPromise = fetchRemoteState({ source })
+    .catch((error) => {
+      console.error(error);
+      setRemoteStatus("DB 동기화 지연", "error");
+      return false;
+    })
+    .finally(() => {
+      remoteResumeSyncInFlight = false;
+      remoteInitialSyncDone = true;
+      remoteResumeSyncPromise = null;
+      checkAlarms();
+    });
+  return remoteResumeSyncPromise;
 }
 
 function applyRemoteState(row, { force = false, source = "realtime" } = {}) {
@@ -876,6 +908,7 @@ async function saveRemoteNow() {
   if (remoteRow?.data && remoteRow.updated_at) {
     const remoteIsNewerThanLastSync = !lastRemoteUpdatedAt || new Date(remoteRow.updated_at) > new Date(lastRemoteUpdatedAt);
     const remoteIsNewerThanLocal = new Date(remoteRow.updated_at) > new Date(localUpdatedAt);
+    if (remoteIsNewerThanLastSync) mergeRemoteAlarmEvents(dataToSave, normalizeDb(remoteRow.data));
     if (remoteIsNewerThanLastSync && remoteIsNewerThanLocal) {
       applyRemoteState(remoteRow, { force: true, source: "save" });
       return;
@@ -902,6 +935,7 @@ async function saveRemoteNow() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
   lastRemoteUpdatedAt = localUpdatedAt;
   setRemoteStatus("DB 연결됨", "online");
+  syncAlarmModalFromRemote("local");
 }
 
 function seedDb() {
@@ -4568,6 +4602,78 @@ function findAlarmEventForMinute(alarmId, date) {
   });
 }
 
+function getAlarmEventMinuteKey(log) {
+  const triggeredAt = log?.triggeredAt ? new Date(log.triggeredAt) : null;
+  if (!log?.alarmId || !triggeredAt || Number.isNaN(triggeredAt.getTime())) return "";
+  return `${log.alarmId}|${dateKeyFromIso(log.triggeredAt)}|${localTimeValue(triggeredAt)}`;
+}
+
+function getAlarmEventStatusRank(status) {
+  if (status === "acknowledged") return 4;
+  if (status === "snoozed") return 3;
+  if (status === "missed") return 2;
+  if (status === "triggered") return 1;
+  return 0;
+}
+
+function getAlarmEventUpdatedAt(log) {
+  return log?.updatedAt || log?.acknowledgedAt || log?.snoozedUntil || log?.triggeredAt || "";
+}
+
+function shouldAlarmEventWin(nextLog, currentLog) {
+  const nextRank = getAlarmEventStatusRank(nextLog?.status);
+  const currentRank = getAlarmEventStatusRank(currentLog?.status);
+  if (nextRank !== currentRank) return nextRank > currentRank;
+  return isIsoAfter(getAlarmEventUpdatedAt(nextLog), getAlarmEventUpdatedAt(currentLog));
+}
+
+function mergeRemoteAlarmEvents(localData, remoteData) {
+  if (!Array.isArray(localData?.alarmEventLogs) || !Array.isArray(remoteData?.alarmEventLogs)) return false;
+
+  const remoteByKey = new Map();
+  remoteData.alarmEventLogs.forEach((remoteLog) => {
+    const key = getAlarmEventMinuteKey(remoteLog);
+    if (!key) return;
+    const current = remoteByKey.get(key);
+    if (!current || shouldAlarmEventWin(remoteLog, current)) remoteByKey.set(key, remoteLog);
+  });
+
+  let changed = false;
+  const mergedLogs = localData.alarmEventLogs.map((localLog) => {
+    const key = getAlarmEventMinuteKey(localLog);
+    const remoteLog = key ? remoteByKey.get(key) : null;
+    if (remoteLog && shouldAlarmEventWin(remoteLog, localLog)) {
+      changed = true;
+      return { ...localLog, ...remoteLog };
+    }
+    return localLog;
+  });
+
+  remoteByKey.forEach((remoteLog, key) => {
+    if (!mergedLogs.some((log) => getAlarmEventMinuteKey(log) === key)) {
+      changed = true;
+      mergedLogs.push(remoteLog);
+    }
+  });
+
+  const dedupedByKey = new Map();
+  const logsWithoutKey = [];
+  mergedLogs.forEach((log) => {
+    const key = getAlarmEventMinuteKey(log);
+    if (!key) {
+      logsWithoutKey.push(log);
+      return;
+    }
+    const current = dedupedByKey.get(key);
+    if (!current || shouldAlarmEventWin(log, current)) dedupedByKey.set(key, log);
+  });
+  const dedupedLogs = [...logsWithoutKey, ...dedupedByKey.values()];
+  if (dedupedLogs.length !== mergedLogs.length) changed = true;
+
+  if (changed) localData.alarmEventLogs = dedupedLogs;
+  return changed;
+}
+
 function getAlarmDisplayFromEvent(eventLog) {
   const alarm = db.alarms.find((item) => item.id === eventLog?.alarmId);
   return {
@@ -4642,6 +4748,8 @@ function snoozeAlarm() {
 }
 
 function checkAlarms() {
+  if (document.visibilityState && document.visibilityState !== "visible") return;
+  if (supabaseClient && (!remoteInitialSyncDone || remoteResumeSyncInFlight)) return;
   const now = new Date();
   const day = dayKeys[now.getDay()];
   let changed = false;
@@ -5154,7 +5262,7 @@ document.addEventListener("keydown", (event) => {
 });
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
-    checkAlarms();
+    syncRemoteBeforeAlarmCheck("resume");
     if (!state.audioUnlocked) unlockAudio({ announce: false });
     if (state.audioUnlocked) requestWakeLock();
   }
@@ -5163,7 +5271,6 @@ document.addEventListener("visibilitychange", () => {
 render();
 updateCurrentDateTime();
 prepareSpeechVoices();
-checkAlarms();
 initRemoteSync();
 setupAutomaticAudioUnlock();
 setInterval(updateCurrentDateTime, 1000);
