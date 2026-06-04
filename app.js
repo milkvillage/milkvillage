@@ -703,8 +703,9 @@ function makeAlarmSoundKoreanInfo(fileName, fallbackName = "") {
 
 function getAlarmSoundDisplay(sound) {
   const generated = makeAlarmSoundKoreanInfo(sound?.fileName || sound?.name || "", sound?.name || "");
+  const fileLabel = sound?.fileName || sound?.name || generated.name || "알림음";
   return {
-    name: hasKoreanText(sound?.name) ? sound.name : generated.name,
+    name: fileLabel,
     description: hasKoreanText(sound?.description) ? sound.description : generated.description,
   };
 }

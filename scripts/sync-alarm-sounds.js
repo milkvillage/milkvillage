@@ -166,7 +166,7 @@ async function main() {
     const nextSound = {
       ...(existing || {}),
       id: existing?.id || makeSoundId(fileName),
-      name: shouldUseGeneratedName(existing) ? soundInfo.name : existing.name,
+      name: fileName,
       description: shouldUseGeneratedDescription(existing) ? soundInfo.description : existing.description,
       fileName,
       url: publicUrl,
@@ -368,7 +368,7 @@ function makeSoundId(fileName) {
 }
 
 function makeSoundName(fileName) {
-  return makeSoundInfo(fileName).name;
+  return fileName;
 }
 
 function resolveSoundId(soundId, alarmSounds) {
@@ -405,10 +405,6 @@ function makeSoundInfo(fileName) {
     name,
     description: `${name}을 놓치지 않도록 알려주는 알림음입니다.`,
   };
-}
-
-function shouldUseGeneratedName(existing) {
-  return !existing?.name || !hasKoreanText(existing.name);
 }
 
 function shouldUseGeneratedDescription(existing) {
