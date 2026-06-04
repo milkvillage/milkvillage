@@ -21,6 +21,79 @@ const config = {
 };
 
 const publicBaseUrl = `${config.supabaseUrl}/storage/v1/object/public/${config.bucket}`;
+const ALARM_SOUND_KOREAN_PRESETS = {
+  "store-cleanliness-check": {
+    name: "위생 관리 점검",
+    description: "매장 청결과 위생 상태를 확인하라는 알림음입니다.",
+  },
+  "pre-peak-supplies": {
+    name: "피크 전 소모품 준비",
+    description: "바쁜 시간 전에 필요한 재료와 소모품을 준비하라는 알림음입니다.",
+  },
+  "supplies-check": {
+    name: "소모품 확인",
+    description: "부족한 소모품을 확인하고 채우라는 알림음입니다.",
+  },
+};
+const ALARM_SOUND_WORDS_KO = {
+  store: "매장",
+  shop: "매장",
+  cleanliness: "청결",
+  clean: "청소",
+  cleaning: "청소",
+  hygiene: "위생",
+  sanitation: "위생",
+  check: "확인",
+  inspection: "점검",
+  inspect: "점검",
+  pre: "전",
+  before: "전",
+  peak: "피크",
+  busy: "피크",
+  supplies: "소모품",
+  supply: "소모품",
+  ingredient: "재료",
+  ingredients: "재료",
+  stock: "재고",
+  inventory: "재고",
+  order: "발주",
+  prep: "준비",
+  prepare: "준비",
+  ready: "준비",
+  open: "오픈",
+  opening: "오픈",
+  close: "마감",
+  closing: "마감",
+  kitchen: "주방",
+  freezer: "냉동고",
+  fridge: "냉장고",
+  refrigerator: "냉장고",
+  pos: "포스",
+  payment: "결제",
+  trash: "쓰레기",
+  bathroom: "화장실",
+  cup: "컵",
+  cups: "컵",
+  straw: "빨대",
+  straws: "빨대",
+  milk: "우유",
+  tapioca: "타피오카",
+  pearl: "펄",
+  pearls: "펄",
+  sugar: "설탕",
+  cream: "생크림",
+  cheese: "치즈",
+  powder: "파우더",
+  manager: "매니저",
+  staff: "직원",
+  music: "음악",
+  light: "조명",
+  lights: "조명",
+  temperature: "온도",
+  delivery: "배송",
+  receive: "입고",
+  received: "입고",
+};
 
 main().catch((error) => {
   console.error(`[alarm-sync] ${error.message}`);
@@ -58,6 +131,7 @@ async function main() {
     const existing = byFileName.get(fileName.toLowerCase());
     const objectName = fileName;
     const publicUrl = `${publicBaseUrl}/${encodePathSegment(objectName)}?v=${Math.trunc(stat.mtimeMs)}`;
+    const soundInfo = makeSoundInfo(fileName);
 
     if (state[fileName] !== fingerprint || !existing) {
       await uploadMp3(fullPath, objectName);
@@ -68,7 +142,8 @@ async function main() {
     const nextSound = {
       ...(existing || {}),
       id: existing?.id || makeSoundId(fileName),
-      name: existing?.name || makeSoundName(fileName),
+      name: shouldUseGeneratedName(existing) ? soundInfo.name : existing.name,
+      description: shouldUseGeneratedDescription(existing) ? soundInfo.description : existing.description,
       fileName,
       url: publicUrl,
       voiceURI: "",
@@ -91,6 +166,7 @@ async function main() {
     const previous = JSON.stringify({
       id: existing.id,
       name: existing.name,
+      description: existing.description || "",
       fileName: existing.fileName,
       url: existing.url,
       voiceURI: existing.voiceURI || "",
@@ -103,6 +179,7 @@ async function main() {
     const next = JSON.stringify({
       id: nextSound.id,
       name: nextSound.name,
+      description: nextSound.description || "",
       fileName: nextSound.fileName,
       url: nextSound.url,
       voiceURI: nextSound.voiceURI,
@@ -235,7 +312,45 @@ function makeSoundId(fileName) {
 }
 
 function makeSoundName(fileName) {
-  return path.basename(fileName, path.extname(fileName)).replace(/[-_]+/g, " ").trim();
+  return makeSoundInfo(fileName).name;
+}
+
+function makeSoundInfo(fileName) {
+  const baseName = path.basename(fileName, path.extname(fileName)).trim();
+  const preset = ALARM_SOUND_KOREAN_PRESETS[baseName.toLowerCase()];
+  if (preset) return preset;
+
+  if (hasKoreanText(baseName)) {
+    return {
+      name: baseName,
+      description: `${baseName} 알림음입니다.`,
+    };
+  }
+
+  const words = baseName
+    .toLowerCase()
+    .split(/[-_\s]+/)
+    .map((word) => ALARM_SOUND_WORDS_KO[word] || "")
+    .filter(Boolean);
+  const uniqueWords = words.filter((word, index) => words.indexOf(word) === index);
+  const name = uniqueWords.length ? uniqueWords.join(" ") : baseName.replace(/[-_]+/g, " ").trim() || "알림음";
+
+  return {
+    name,
+    description: `${name}을 놓치지 않도록 알려주는 알림음입니다.`,
+  };
+}
+
+function shouldUseGeneratedName(existing) {
+  return !existing?.name || !hasKoreanText(existing.name);
+}
+
+function shouldUseGeneratedDescription(existing) {
+  return !existing?.description || !hasKoreanText(existing.description);
+}
+
+function hasKoreanText(value) {
+  return /[가-힣]/.test(String(value || ""));
 }
 
 function hashString(value) {

@@ -44,22 +44,98 @@ const INTERNAL_ALARM_SOUNDS = [
   {
     id: "sound_store_cleanliness",
     name: "위생 관리 점검",
+    description: "매장 청결과 위생 상태를 확인하라는 알림음입니다.",
     fileName: "store-cleanliness-check.mp3",
     url: `${ALARM_SOUND_PUBLIC_BASE_URL}/store-cleanliness-check.mp3`,
   },
   {
     id: "sound_pre_peak_supplies",
     name: "피크 전 소모품 준비",
+    description: "바쁜 시간 전에 필요한 재료와 소모품을 준비하라는 알림음입니다.",
     fileName: "pre-peak-supplies.mp3",
     url: `${ALARM_SOUND_PUBLIC_BASE_URL}/pre-peak-supplies.mp3`,
   },
   {
     id: DEFAULT_ALARM_SOUND_ID,
     name: "소모품 확인",
+    description: "부족한 소모품을 확인하고 채우라는 알림음입니다.",
     fileName: "supplies-check.mp3",
     url: `${ALARM_SOUND_PUBLIC_BASE_URL}/supplies-check.mp3`,
   },
 ];
+const ALARM_SOUND_KOREAN_PRESETS = {
+  "store-cleanliness-check": {
+    name: "위생 관리 점검",
+    description: "매장 청결과 위생 상태를 확인하라는 알림음입니다.",
+  },
+  "pre-peak-supplies": {
+    name: "피크 전 소모품 준비",
+    description: "바쁜 시간 전에 필요한 재료와 소모품을 준비하라는 알림음입니다.",
+  },
+  "supplies-check": {
+    name: "소모품 확인",
+    description: "부족한 소모품을 확인하고 채우라는 알림음입니다.",
+  },
+};
+const ALARM_SOUND_WORDS_KO = {
+  store: "매장",
+  shop: "매장",
+  cleanliness: "청결",
+  clean: "청소",
+  cleaning: "청소",
+  hygiene: "위생",
+  sanitation: "위생",
+  check: "확인",
+  inspection: "점검",
+  inspect: "점검",
+  pre: "전",
+  before: "전",
+  peak: "피크",
+  busy: "피크",
+  supplies: "소모품",
+  supply: "소모품",
+  ingredient: "재료",
+  ingredients: "재료",
+  stock: "재고",
+  inventory: "재고",
+  order: "발주",
+  prep: "준비",
+  prepare: "준비",
+  ready: "준비",
+  open: "오픈",
+  opening: "오픈",
+  close: "마감",
+  closing: "마감",
+  kitchen: "주방",
+  freezer: "냉동고",
+  fridge: "냉장고",
+  refrigerator: "냉장고",
+  pos: "포스",
+  payment: "결제",
+  trash: "쓰레기",
+  bathroom: "화장실",
+  cup: "컵",
+  cups: "컵",
+  straw: "빨대",
+  straws: "빨대",
+  milk: "우유",
+  tapioca: "타피오카",
+  pearl: "펄",
+  pearls: "펄",
+  sugar: "설탕",
+  cream: "생크림",
+  cheese: "치즈",
+  powder: "파우더",
+  manager: "매니저",
+  staff: "직원",
+  music: "음악",
+  light: "조명",
+  lights: "조명",
+  temperature: "온도",
+  delivery: "배송",
+  receive: "입고",
+  received: "입고",
+};
 const supabaseClient =
   window.supabase && SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY
     ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
@@ -545,10 +621,59 @@ function normalizeAlarmDays(days) {
   return uniqueDays.length ? uniqueDays : [];
 }
 
+function hasKoreanText(value) {
+  return /[가-힣]/.test(String(value || ""));
+}
+
+function alarmSoundBaseName(fileName) {
+  return String(fileName || "")
+    .split(/[\\/]/)
+    .pop()
+    .split("?")[0]
+    .replace(/\.[^.]+$/, "")
+    .trim();
+}
+
+function makeAlarmSoundKoreanInfo(fileName, fallbackName = "") {
+  const baseName = alarmSoundBaseName(fileName || fallbackName);
+  const preset = ALARM_SOUND_KOREAN_PRESETS[baseName.toLowerCase()];
+  if (preset) return preset;
+
+  if (hasKoreanText(baseName)) {
+    return {
+      name: baseName,
+      description: `${baseName} 알림음입니다.`,
+    };
+  }
+
+  const words = baseName
+    .toLowerCase()
+    .split(/[-_\s]+/)
+    .map((word) => ALARM_SOUND_WORDS_KO[word] || "")
+    .filter(Boolean);
+  const uniqueWords = words.filter((word, index) => words.indexOf(word) === index);
+  const name = uniqueWords.length ? uniqueWords.join(" ") : baseName.replace(/[-_]+/g, " ").trim() || "알림음";
+
+  return {
+    name,
+    description: `${name}을 놓치지 않도록 알려주는 알림음입니다.`,
+  };
+}
+
+function getAlarmSoundDisplay(sound) {
+  const generated = makeAlarmSoundKoreanInfo(sound?.fileName || sound?.name || "", sound?.name || "");
+  return {
+    name: hasKoreanText(sound?.name) ? sound.name : generated.name,
+    description: hasKoreanText(sound?.description) ? sound.description : generated.description,
+  };
+}
+
 function normalizeVoicePreset(sound) {
+  const display = getAlarmSoundDisplay(sound);
   return {
     id: sound.id,
-    name: sound.name || "기본 음성",
+    name: display.name || "기본 알림음",
+    description: display.description || "",
     fileName: sound.fileName || "",
     url: sound.url || "",
     voiceURI: sound.voiceURI || "",
@@ -977,9 +1102,12 @@ function renderAlarmDayControls(days) {
 function renderAlarmSoundOptions(selectedSoundId) {
   return db.alarmSounds
     .map(
-      (sound) => `
-        <option value="${escapeAttr(sound.id)}" ${sound.id === selectedSoundId ? "selected" : ""}>${escapeHtml(sound.name)}</option>
-      `,
+      (sound) => {
+        const display = getAlarmSoundDisplay(sound);
+        return `
+          <option value="${escapeAttr(sound.id)}" ${sound.id === selectedSoundId ? "selected" : ""}>${escapeHtml(display.name)}</option>
+        `;
+      },
     )
     .join("");
 }
@@ -993,15 +1121,18 @@ function renderAlarmSoundTestSection() {
       <div class="alarm-sound-test-list">
         ${db.alarmSounds
           .map(
-            (sound) => `
-              <div class="alarm-sound-test-row">
-                <div>
-                  <strong>${escapeHtml(sound.name)}</strong>
-                  <span>${escapeHtml(sound.fileName || "Supabase Storage")}</span>
+            (sound) => {
+              const display = getAlarmSoundDisplay(sound);
+              return `
+                <div class="alarm-sound-test-row">
+                  <div>
+                    <strong>${escapeHtml(display.name)}</strong>
+                    <span>${escapeHtml(display.description)}</span>
+                  </div>
+                  <button class="button button--ghost button--small" type="button" data-test-alarm-sound="${escapeAttr(sound.id)}">테스트 재생</button>
                 </div>
-                <button class="button button--ghost button--small" type="button" data-test-alarm-sound="${escapeAttr(sound.id)}">테스트 재생</button>
-              </div>
-            `,
+              `;
+            },
           )
           .join("")}
       </div>
@@ -3738,6 +3869,7 @@ function renderAlarmsAdmin(container) {
   state.selectedAlarmId = alarm?.id || null;
   const alarmTitleValue = getAlarmTitleInputValue(alarm);
   const alarmTitleChoices = getAlarmTitleChoices();
+  const selectedAlarmSoundDisplay = alarm ? getAlarmSoundDisplay(getVoicePreset(alarm.soundId || db.settings.defaultSoundId)) : null;
   container.innerHTML = `
     <div class="alarm-admin-panel">
       <section class="alarm-list-panel">
@@ -3790,6 +3922,11 @@ function renderAlarmsAdmin(container) {
               <select id="alarmSoundInput">
                 ${renderAlarmSoundOptions(alarm.soundId || db.settings.defaultSoundId)}
               </select>
+              ${
+                selectedAlarmSoundDisplay
+                  ? `<small class="alarm-sound-description" id="alarmSoundDescription">${escapeHtml(selectedAlarmSoundDisplay.description)}</small>`
+                  : ""
+              }
             </label>
             <div class="alarm-action-row">
               <button class="button button--primary" id="saveAlarm" type="button">저장</button>
@@ -3826,6 +3963,11 @@ function renderAlarmsAdmin(container) {
       input.value = button.dataset.fillAlarmTitle || "";
       input.focus();
     });
+  });
+  container.querySelector("#alarmSoundInput")?.addEventListener("change", (event) => {
+    const description = container.querySelector("#alarmSoundDescription");
+    if (!description) return;
+    description.textContent = getAlarmSoundDisplay(getVoicePreset(event.target.value)).description;
   });
   container.querySelector("#deleteAlarm")?.addEventListener("click", () => {
     if (!alarm) return;
