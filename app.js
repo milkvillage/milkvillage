@@ -209,7 +209,9 @@ const els = {
   soundHelp: document.querySelector("#soundHelp"),
   soundHelpButton: document.querySelector("#soundHelpButton"),
   attendanceConfirmModal: document.querySelector("#attendanceConfirmModal"),
+  attendanceConfirmTitle: document.querySelector("#attendanceConfirmTitle"),
   attendanceConfirmSummary: document.querySelector("#attendanceConfirmSummary"),
+  attendanceConfirmWarning: document.querySelector("#attendanceConfirmWarning"),
   attendanceConfirmClose: document.querySelector("#attendanceConfirmClose"),
   attendanceConfirmFinal: document.querySelector("#attendanceConfirmFinal"),
 };
@@ -2252,6 +2254,7 @@ function buildAttendanceDraft(status, container) {
   }
 
   return {
+    confirmType: "employee",
     date: getSelectedAttendanceDate(),
     staffId: staff.id,
     staffName: staff.name,
@@ -2286,13 +2289,18 @@ function openAttendanceConfirmModal(container) {
   }
   const draft = buildAttendanceDraft(status, container);
   if (!draft) return;
-  state.pendingAttendanceDraft = draft;
+  showAttendanceConfirmModal(draft);
+}
 
+function showAttendanceConfirmModal(draft) {
+  state.pendingAttendanceDraft = draft;
   if (!els.attendanceConfirmModal || !els.attendanceConfirmSummary) {
     if (confirm(getAttendanceConfirmText(draft))) finalizeAttendanceRecord();
     return;
   }
 
+  if (els.attendanceConfirmTitle) els.attendanceConfirmTitle.textContent = getAttendanceConfirmTitle(draft);
+  if (els.attendanceConfirmWarning) els.attendanceConfirmWarning.textContent = getAttendanceConfirmWarning(draft);
   els.attendanceConfirmSummary.innerHTML = attendanceConfirmSummaryRows(draft)
     .map(
       ([label, value]) => `
@@ -2307,9 +2315,19 @@ function openAttendanceConfirmModal(container) {
   els.attendanceConfirmFinal?.focus();
 }
 
+function getAttendanceConfirmTitle(draft) {
+  return draft?.confirmType === "manager" ? "매니저 최종 확인" : "근퇴 최종 확인";
+}
+
+function getAttendanceConfirmWarning(draft) {
+  return draft?.confirmType === "manager"
+    ? "최종확인을 누르면 매니저 서명은 수정할 수 없습니다."
+    : "최종확인을 누르면 근무자 서명과 출근/결근 기록은 수정할 수 없습니다.";
+}
+
 function getAttendanceConfirmText(draft) {
   const rows = attendanceConfirmSummaryRows(draft).map(([label, value]) => `${label}: ${value}`);
-  return `${rows.join("\n")}\n\n최종확인을 누르면 근무자 서명과 출근/결근 기록은 수정할 수 없습니다.`;
+  return `${rows.join("\n")}\n\n${getAttendanceConfirmWarning(draft)}`;
 }
 
 function closeAttendanceConfirmModal() {
@@ -2320,9 +2338,13 @@ function closeAttendanceConfirmModal() {
 function finalizeAttendanceRecord() {
   const draft = state.pendingAttendanceDraft;
   if (!draft) return;
-  saveAttendanceRecord(draft);
-  state.pendingAttendanceStatus = null;
-  state.pendingAttendanceKey = "";
+  if (draft.confirmType === "manager") {
+    saveManagerAttendance(draft);
+  } else {
+    saveAttendanceRecord(draft);
+    state.pendingAttendanceStatus = null;
+    state.pendingAttendanceKey = "";
+  }
   state.pendingAttendanceDraft = null;
   if (els.attendanceConfirmModal) els.attendanceConfirmModal.hidden = true;
 }
@@ -2383,8 +2405,29 @@ function confirmManagerAttendance(container) {
     return;
   }
 
-  record.staffName = staff.name;
-  record.managerSignature = managerSignature;
+  showAttendanceConfirmModal({
+    confirmType: "manager",
+    date: record.date,
+    staffId: record.staffId,
+    staffName: staff.name,
+    status: record.status,
+    actualStart: record.actualStart,
+    actualEnd: record.actualEnd,
+    adjustmentReason: record.adjustmentReason,
+    managerSignature,
+  });
+}
+
+function saveManagerAttendance(draft) {
+  if (!draft) return;
+  const record = getAttendanceRecord(draft.date, draft.staffId);
+  if (!record || record.status !== "present") {
+    alert("출근 기록을 먼저 저장해주세요.");
+    renderAttendanceScreen();
+    return;
+  }
+  record.staffName = draft.staffName;
+  record.managerSignature = draft.managerSignature;
   record.updatedAt = nowIso();
   saveDb();
   renderAttendanceScreen();
