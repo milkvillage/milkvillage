@@ -413,10 +413,10 @@ h1 {
 .log-list {
   list-style: none;
   margin: 0;
-  padding: 8px 16px 16px;
+  padding: 8px 14px 14px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   overflow: auto;
 }
 
@@ -424,12 +424,12 @@ h1 {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 14px;
-  min-height: 64px;
-  padding: 12px 14px;
+  gap: 10px;
+  min-height: 56px;
+  padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #fbfcfd;
+  background: #f7fafb;
 }
 
 .log-item.is-canceled {
@@ -438,20 +438,20 @@ h1 {
 }
 
 .log-name {
-  font-size: 19px;
+  font-size: 17px;
   font-weight: 900;
 }
 
 .log-meta {
-  margin-top: 4px;
+  margin-top: 3px;
   color: var(--muted);
-  font-size: 15px;
+  font-size: 14px;
 }
 
 .row-action {
-  min-height: 44px;
-  padding: 10px 14px;
-  background: var(--red-soft);
+  min-height: 36px;
+  padding: 8px 11px;
+  background: #f7dddd;
   color: var(--red);
   font-weight: 900;
 }
@@ -1560,6 +1560,19 @@ th {
   justify-content: flex-end;
 }
 
+.signature-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.signature-help {
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 800;
+}
+
 .signature-heading .button.is-confirming {
   background: var(--red-soft);
   color: var(--red);
@@ -1574,6 +1587,11 @@ th {
   background: #fff;
   cursor: crosshair;
   touch-action: none;
+}
+
+.signature-pad.is-locked {
+  background: #eef2f4;
+  cursor: not-allowed;
 }
 
 .attendance-action-row {

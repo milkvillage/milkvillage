@@ -1316,7 +1316,7 @@ function renderSoundStatus() {
 
 function render() {
   const titleMap = {
-    make: "재료 만들기(입력필수)",
+    make: "재료제조(입력필수)",
     orders: "발주(확인사항)",
     ops: "운영 체크(입력필수)",
     attendance: "근퇴기록(입력필수)",
@@ -1403,9 +1403,9 @@ function renderMakeScreen() {
         </div>
       </section>
 
-      <section class="panel" aria-label="오늘 제조 로그">
+      <section class="panel" aria-label="오늘 제조 기록">
         <div class="panel-header">
-          <h2>오늘 제조 로그</h2>
+          <h2>오늘 제조 기록</h2>
           <p>직원 화면에는 배치 단위 기록만 표시됩니다.</p>
         </div>
         ${
@@ -1424,14 +1424,14 @@ function renderMakeScreen() {
                         ${
                           batch.status === "active"
                             ? `<button class="row-action" type="button" data-open-cancel="${batch.id}">취소</button>`
-                            : `<span class="badge badge--ok">복구 완료</span>`
+                            : ""
                         }
                       </li>
                     `,
                   )
                   .join("")}
               </ul>`
-            : `<div class="empty-state">오늘 제조 로그가 없습니다.</div>`
+            : `<div class="empty-state">오늘 제조 기록이 없습니다.</div>`
         }
       </section>
     </div>
@@ -1743,6 +1743,11 @@ function renderAttendanceScreen() {
   const selectedDate = getSelectedAttendanceDate();
   const selectedRecord = selectedStaff ? getAttendanceRecord(selectedDate, selectedStaff.id) : null;
   const timingValues = getAttendanceTimingValues(selectedStaff, selectedDate, selectedRecord);
+  const employeeSignatureLocked = Boolean(selectedRecord?.employeeSignature);
+  const managerCanSign = Boolean(
+    selectedRecord?.status === "present" && selectedRecord.employeeSignature && !selectedRecord.managerSignature,
+  );
+  const managerSignatureLocked = !managerCanSign;
 
   els.workArea.innerHTML = `
     <section class="attendance-screen" aria-label="근퇴기록">
@@ -1803,24 +1808,27 @@ function renderAttendanceScreen() {
             <div class="signature-card">
               <div class="signature-heading">
                 <strong>근무자 서명</strong>
-                <button class="button button--ghost button--small" type="button" data-clear-signature="employee">지우기</button>
+                <button class="button button--ghost button--small" type="button" data-clear-signature="employee" ${employeeSignatureLocked ? "disabled" : ""}>지우기</button>
               </div>
               <canvas class="signature-pad" id="employeeSignaturePad" aria-label="근무자 서명 입력"></canvas>
+              <div class="signature-actions">
+                <button class="button button--primary" type="button" data-attendance-status="present" ${selectedStaff && !employeeSignatureLocked ? "" : "disabled"}>출근</button>
+                <button class="button button--danger" type="button" data-attendance-status="absent" ${selectedStaff && !employeeSignatureLocked ? "" : "disabled"}>결근</button>
+              </div>
             </div>
             <div class="signature-card">
               <div class="signature-heading">
                 <strong>매니저 서명</strong>
-                <div class="signature-button-group">
-                  <button class="button button--ghost button--small" type="button" data-clear-signature="manager">지우기</button>
-                  <button class="button button--primary button--small" type="button" id="confirmManagerAttendance" ${selectedRecord?.status === "present" ? "" : "disabled"}>확인</button>
-                </div>
+                <button class="button button--ghost button--small" type="button" data-clear-signature="manager" ${managerSignatureLocked ? "disabled" : ""}>지우기</button>
               </div>
               <canvas class="signature-pad" id="managerSignaturePad" aria-label="매니저 서명 입력"></canvas>
+              <div class="signature-actions">
+                <button class="button button--primary" type="button" id="confirmManagerAttendance" ${managerCanSign ? "" : "disabled"}>확인</button>
+                <span class="signature-help">${managerCanSign ? "출근 확인 서명을 입력한 뒤 확인하세요." : "근무자 출근 기록 후 매니저 확인이 가능합니다."}</span>
+              </div>
             </div>
           </div>
           <div class="attendance-action-row">
-            <button class="button button--primary" type="button" data-attendance-status="present" ${selectedStaff ? "" : "disabled"}>출근</button>
-            <button class="button button--danger" type="button" data-attendance-status="absent" ${selectedStaff ? "" : "disabled"}>결근</button>
             <button class="button button--ghost" type="button" id="deleteAttendanceRecord" ${selectedRecord ? "" : "disabled"}>기록 삭제</button>
             ${
               selectedRecord
@@ -1847,8 +1855,12 @@ function renderAttendanceScreen() {
     state.selectedAttendanceStaffId = staffSelect.value || null;
     renderAttendanceScreen();
   });
-  setupSignaturePad(els.workArea.querySelector("#employeeSignaturePad"), selectedRecord?.employeeSignature || "");
-  setupSignaturePad(els.workArea.querySelector("#managerSignaturePad"), selectedRecord?.managerSignature || "");
+  setupSignaturePad(els.workArea.querySelector("#employeeSignaturePad"), selectedRecord?.employeeSignature || "", {
+    locked: employeeSignatureLocked,
+  });
+  setupSignaturePad(els.workArea.querySelector("#managerSignaturePad"), selectedRecord?.managerSignature || "", {
+    locked: managerSignatureLocked,
+  });
   els.workArea.querySelectorAll("[data-clear-signature]").forEach((button) => {
     button.addEventListener("click", () => {
       handleSignatureClearRequest(button, els.workArea.querySelector(`#${button.dataset.clearSignature}SignaturePad`));
@@ -1967,7 +1979,12 @@ function deleteAttendanceRecord() {
   const date = getSelectedAttendanceDate();
   const record = getAttendanceRecord(date, staff.id);
   if (!record) return;
-  if (!confirm(`${staff.name} ${formatAttendanceDate(date)} 근퇴 기록을 삭제할까요?`)) return;
+  const pin = prompt(`${staff.name} ${formatAttendanceDate(date)} 근퇴 기록을 삭제하려면 관리자 PIN을 입력해주세요.`);
+  if (pin === null) return;
+  if (pin !== db.settings.adminPin) {
+    alert("관리자 PIN이 맞지 않습니다.");
+    return;
+  }
 
   db.operations.attendanceRecords = (db.operations.attendanceRecords || []).filter((item) => item.id !== record.id);
   saveDb();
@@ -2132,8 +2149,9 @@ function isSignatureImage(value) {
   return typeof value === "string" && value.startsWith("data:image/");
 }
 
-function setupSignaturePad(canvas, initialData = "") {
+function setupSignaturePad(canvas, initialData = "", options = {}) {
   if (!canvas) return;
+  const locked = Boolean(options.locked);
   const context = canvas.getContext("2d");
   const ratio = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
@@ -2151,6 +2169,8 @@ function setupSignaturePad(canvas, initialData = "") {
   canvas.dataset.initialSignature = "";
   canvas.dataset.signatureDirty = "0";
   canvas.dataset.signatureLoaded = "0";
+  canvas.dataset.locked = locked ? "1" : "0";
+  canvas.classList.toggle("is-locked", locked);
 
   if (isSignatureImage(initialData)) {
     canvas.dataset.hasSignature = "1";
@@ -2165,6 +2185,8 @@ function setupSignaturePad(canvas, initialData = "") {
     };
     image.src = initialData;
   }
+
+  if (locked) return;
 
   let isDrawing = false;
   const getPoint = (event) => {
@@ -2208,7 +2230,7 @@ function setupSignaturePad(canvas, initialData = "") {
 }
 
 function clearSignaturePad(canvas) {
-  if (!canvas) return;
+  if (!canvas || canvas.dataset.locked === "1") return;
   const context = canvas.getContext("2d");
   const rect = canvas.getBoundingClientRect();
   context.clearRect(0, 0, rect.width, rect.height);
@@ -2219,7 +2241,7 @@ function clearSignaturePad(canvas) {
 }
 
 function handleSignatureClearRequest(button, canvas) {
-  if (!button || !canvas || canvas.dataset.hasSignature !== "1") return;
+  if (!button || !canvas || canvas.dataset.locked === "1" || canvas.dataset.hasSignature !== "1") return;
   window.clearTimeout(button.clearSignatureTimer);
   if (button.dataset.clearConfirm === "1") {
     button.dataset.clearConfirm = "0";
@@ -2539,7 +2561,7 @@ function renderManagerSummaryAdmin(container) {
       </section>
 
       <section class="admin-card">
-        <h3>오늘 제조 로그</h3>
+        <h3>오늘 제조 기록</h3>
         ${
           todayBatches.length
             ? `<ul class="compact-list">
@@ -2548,7 +2570,7 @@ function renderManagerSummaryAdmin(container) {
                   .map((batch) => `<li><strong>${timeText(batch.createdAt)}</strong><span>${escapeHtml(batch.recipeName)} ${escapeHtml(batch.variantLabel)}</span></li>`)
                   .join("")}
               </ul>`
-            : `<div class="empty-state">오늘 제조 로그가 없습니다.</div>`
+            : `<div class="empty-state">오늘 제조 기록이 없습니다.</div>`
         }
       </section>
     </div>
@@ -4741,6 +4763,7 @@ els.adminShortcut.addEventListener("click", () => setScreen("admin"));
 els.soundHelpButton?.addEventListener("click", () => unlockAudio({ announce: true, immediate: true }));
 els.cancelClose.addEventListener("click", closeCancelModal);
 els.cancelConfirm.addEventListener("click", () => {
+  if (!confirm("정말 취소할까요? 차감된 재고가 복구됩니다.")) return;
   cancelPrepBatch(state.pendingCancelBatchId, els.cancelReason.value.trim());
   closeCancelModal();
   renderMakeScreen();
