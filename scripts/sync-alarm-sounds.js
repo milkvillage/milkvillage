@@ -112,17 +112,41 @@ async function main() {
 
   if (!files.length) {
     console.log("[alarm-sync] mp3 file not found");
-    return;
   }
 
   const state = await readJsonFile(statePath, {});
   const remote = await fetchRemoteState();
   const remoteData = remote.data;
-  const alarmSounds = Array.isArray(remoteData.alarmSounds) ? remoteData.alarmSounds : [];
-  const byFileName = new Map(alarmSounds.map((sound) => [String(sound.fileName || "").toLowerCase(), sound]));
+  let alarmSounds = Array.isArray(remoteData.alarmSounds) ? remoteData.alarmSounds : [];
+  const localFileNames = new Set(files.map((fileName) => fileName.toLowerCase()));
   const now = new Date().toISOString();
   let changed = false;
   let uploaded = 0;
+  let removed = 0;
+
+  const removedSounds = alarmSounds.filter((sound) => {
+    const fileName = String(sound.fileName || "").trim();
+    return !fileName || !localFileNames.has(fileName.toLowerCase());
+  });
+
+  if (removedSounds.length) {
+    const removedKeys = new Set(removedSounds.map((sound) => makeSoundKey(sound)));
+    for (const sound of removedSounds) {
+      if (sound.fileName) {
+        await deleteMp3(sound.fileName);
+        delete state[sound.fileName];
+      }
+      removed += 1;
+    }
+    alarmSounds = alarmSounds.filter((sound) => !removedKeys.has(makeSoundKey(sound)));
+    changed = true;
+  }
+
+  Object.keys(state).forEach((fileName) => {
+    if (!localFileNames.has(fileName.toLowerCase())) delete state[fileName];
+  });
+
+  const byFileName = new Map(alarmSounds.map((sound) => [String(sound.fileName || "").toLowerCase(), sound]));
 
   for (const fileName of files) {
     const fullPath = path.join(config.soundFolder, fileName);
@@ -196,6 +220,24 @@ async function main() {
     }
   }
 
+  const previousSoundReferences = JSON.stringify({
+    defaultSoundId: remoteData.settings?.defaultSoundId || "",
+    alarms: Array.isArray(remoteData.alarms) ? remoteData.alarms.map((alarm) => ({ id: alarm.id, soundId: alarm.soundId || "" })) : [],
+  });
+  const defaultSoundId = resolveSoundId(remoteData.settings?.defaultSoundId, alarmSounds);
+  remoteData.settings = { ...(remoteData.settings || {}), defaultSoundId };
+  remoteData.alarms = Array.isArray(remoteData.alarms)
+    ? remoteData.alarms.map((alarm) => ({
+        ...alarm,
+        soundId: resolveSoundId(alarm.soundId, alarmSounds),
+      }))
+    : remoteData.alarms;
+  const nextSoundReferences = JSON.stringify({
+    defaultSoundId: remoteData.settings?.defaultSoundId || "",
+    alarms: Array.isArray(remoteData.alarms) ? remoteData.alarms.map((alarm) => ({ id: alarm.id, soundId: alarm.soundId || "" })) : [],
+  });
+  if (previousSoundReferences !== nextSoundReferences) changed = true;
+
   if (changed) {
     remoteData.alarmSounds = alarmSounds.sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ko-KR"));
     remoteData.meta = { ...(remoteData.meta || {}), updatedAt: now };
@@ -203,7 +245,7 @@ async function main() {
   }
 
   await writeJsonFile(statePath, state);
-  console.log(`[alarm-sync] checked ${files.length} mp3, uploaded ${uploaded}, app list ${changed ? "updated" : "unchanged"}`);
+  console.log(`[alarm-sync] checked ${files.length} mp3, uploaded ${uploaded}, removed ${removed}, app list ${changed ? "updated" : "unchanged"}`);
 }
 
 async function uploadMp3(fullPath, objectName) {
@@ -221,6 +263,20 @@ async function uploadMp3(fullPath, objectName) {
   if (!response.ok) {
     const body = await response.text();
     throw new Error(`upload failed for ${objectName}: ${response.status} ${body}`);
+  }
+}
+
+async function deleteMp3(objectName) {
+  const response = await fetch(`${config.supabaseUrl}/storage/v1/object/${config.bucket}/${encodePathSegment(objectName)}`, {
+    method: "DELETE",
+    headers: {
+      apikey: config.stateAccessKey,
+      Authorization: `Bearer ${config.serviceRoleKey}`,
+    },
+  });
+  if (!response.ok && response.status !== 404) {
+    const body = await response.text();
+    throw new Error(`delete failed for ${objectName}: ${response.status} ${body}`);
   }
 }
 
@@ -313,6 +369,16 @@ function makeSoundId(fileName) {
 
 function makeSoundName(fileName) {
   return makeSoundInfo(fileName).name;
+}
+
+function resolveSoundId(soundId, alarmSounds) {
+  if (!Array.isArray(alarmSounds) || !alarmSounds.length) return "";
+  if (alarmSounds.some((sound) => sound.id === soundId)) return soundId;
+  return alarmSounds.find((sound) => sound.isDefault)?.id || alarmSounds[0]?.id || "";
+}
+
+function makeSoundKey(sound) {
+  return `${sound?.id || ""}|${String(sound?.fileName || "").toLowerCase()}`;
 }
 
 function makeSoundInfo(fileName) {

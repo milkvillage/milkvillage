@@ -403,9 +403,15 @@ function loadDb() {
 
 function normalizeDb(nextDb) {
   const fallback = seedDb();
+  const alarmSounds = normalizeAlarmSounds(nextDb?.alarmSounds, fallback.alarmSounds);
+  const settings = normalizeSettings(nextDb?.settings, fallback.settings);
+  settings.defaultSoundId = resolveAvailableAlarmSoundId(settings.defaultSoundId, alarmSounds);
+  const alarms = Array.isArray(nextDb?.alarms)
+    ? normalizeAlarmSoundReferences(nextDb.alarms.map(normalizeAlarm), alarmSounds, settings.defaultSoundId)
+    : normalizeAlarmSoundReferences(fallback.alarms, alarmSounds, settings.defaultSoundId);
   return {
     meta: { ...fallback.meta, ...(nextDb?.meta || {}), updatedAt: nextDb?.meta?.updatedAt || nextDb?.updatedAt || fallback.meta.updatedAt },
-    settings: normalizeSettings(nextDb?.settings, fallback.settings),
+    settings,
     supplies: Array.isArray(nextDb?.supplies)
       ? nextDb.supplies.map(normalizeSupply).sort((a, b) => a.sortOrder - b.sortOrder)
       : fallback.supplies,
@@ -416,8 +422,8 @@ function normalizeDb(nextDb) {
       : fallback.recipeVariantIngredients,
     prepBatches: Array.isArray(nextDb?.prepBatches) ? nextDb.prepBatches : fallback.prepBatches,
     inventoryTransactions: Array.isArray(nextDb?.inventoryTransactions) ? nextDb.inventoryTransactions : fallback.inventoryTransactions,
-    alarms: Array.isArray(nextDb?.alarms) ? nextDb.alarms.map(normalizeAlarm) : fallback.alarms,
-    alarmSounds: normalizeAlarmSounds(nextDb?.alarmSounds, fallback.alarmSounds),
+    alarms,
+    alarmSounds,
     alarmEventLogs: Array.isArray(nextDb?.alarmEventLogs) ? nextDb.alarmEventLogs : fallback.alarmEventLogs,
     operations: normalizeOperations(nextDb?.operations, fallback.operations),
   };
@@ -437,6 +443,20 @@ function normalizeSettings(settings, fallbackSettings) {
 
 function normalizeTextHistory(values) {
   return uniqueTextValues(Array.isArray(values) ? values : [], ALARM_HISTORY_LIMIT);
+}
+
+function resolveAvailableAlarmSoundId(soundId, alarmSounds) {
+  if (!Array.isArray(alarmSounds) || !alarmSounds.length) return "";
+  if (alarmSounds.some((sound) => sound.id === soundId)) return soundId;
+  return alarmSounds.find((sound) => sound.isDefault)?.id || alarmSounds[0]?.id || "";
+}
+
+function normalizeAlarmSoundReferences(alarms, alarmSounds, defaultSoundId) {
+  const validSoundIds = new Set((alarmSounds || []).map((sound) => sound.id));
+  return (alarms || []).map((alarm) => ({
+    ...alarm,
+    soundId: validSoundIds.has(alarm.soundId) ? alarm.soundId : defaultSoundId,
+  }));
 }
 
 function normalizeOperations(operations, fallbackOperations) {
@@ -689,12 +709,10 @@ function normalizeVoicePreset(sound) {
 
 function normalizeAlarmSounds(values, fallbackValues = []) {
   const byId = new Map();
-  [...(Array.isArray(fallbackValues) ? fallbackValues : []), ...(Array.isArray(values) ? values : [])].forEach((sound) => {
+  const sourceValues = Array.isArray(values) ? values : fallbackValues;
+  (Array.isArray(sourceValues) ? sourceValues : []).forEach((sound) => {
     const normalized = normalizeVoicePreset(sound);
     if (normalized.id && normalized.id !== "sound_default") byId.set(normalized.id, normalized);
-  });
-  INTERNAL_ALARM_SOUNDS.forEach((sound) => {
-    byId.set(sound.id, normalizeVoicePreset({ ...byId.get(sound.id), ...sound, isDefault: sound.id === DEFAULT_ALARM_SOUND_ID }));
   });
   return [...byId.values()];
 }
@@ -1119,22 +1137,24 @@ function renderAlarmSoundTestSection() {
         <h3>알림음 테스트</h3>
       </div>
       <div class="alarm-sound-test-list">
-        ${db.alarmSounds
-          .map(
-            (sound) => {
-              const display = getAlarmSoundDisplay(sound);
-              return `
-                <div class="alarm-sound-test-row">
-                  <div>
-                    <strong>${escapeHtml(display.name)}</strong>
-                    <span>${escapeHtml(display.description)}</span>
-                  </div>
-                  <button class="button button--ghost button--small" type="button" data-test-alarm-sound="${escapeAttr(sound.id)}">테스트 재생</button>
-                </div>
-              `;
-            },
-          )
-          .join("")}
+        ${
+          db.alarmSounds.length
+            ? db.alarmSounds
+                .map((sound) => {
+                  const display = getAlarmSoundDisplay(sound);
+                  return `
+                    <div class="alarm-sound-test-row">
+                      <div>
+                        <strong>${escapeHtml(display.name)}</strong>
+                        <span>${escapeHtml(display.description)}</span>
+                      </div>
+                      <button class="button button--ghost button--small" type="button" data-test-alarm-sound="${escapeAttr(sound.id)}">테스트 재생</button>
+                    </div>
+                  `;
+                })
+                .join("")
+            : `<div class="empty-state">등록된 알림음이 없습니다. 로컬 mp3 폴더에 파일을 넣으면 자동으로 추가됩니다.</div>`
+        }
       </div>
     </section>
   `;
@@ -3869,7 +3889,11 @@ function renderAlarmsAdmin(container) {
   state.selectedAlarmId = alarm?.id || null;
   const alarmTitleValue = getAlarmTitleInputValue(alarm);
   const alarmTitleChoices = getAlarmTitleChoices();
-  const selectedAlarmSoundDisplay = alarm ? getAlarmSoundDisplay(getVoicePreset(alarm.soundId || db.settings.defaultSoundId)) : null;
+  const selectedAlarmSoundDisplay = alarm
+    ? db.alarmSounds.length
+      ? getAlarmSoundDisplay(getVoicePreset(alarm.soundId || db.settings.defaultSoundId))
+      : { description: "등록된 알림음이 없습니다. 로컬 mp3 폴더에 파일을 넣으면 자동으로 추가됩니다." }
+    : null;
   container.innerHTML = `
     <div class="alarm-admin-panel">
       <section class="alarm-list-panel">
@@ -3919,7 +3943,7 @@ function renderAlarmsAdmin(container) {
             ${renderAlarmDayControls(alarm.repeatDays)}
             <label class="field alarm-sound-field">
               <span>알림음</span>
-              <select id="alarmSoundInput">
+              <select id="alarmSoundInput" ${db.alarmSounds.length ? "" : "disabled"}>
                 ${renderAlarmSoundOptions(alarm.soundId || db.settings.defaultSoundId)}
               </select>
               ${
@@ -4007,6 +4031,10 @@ function validateAlarmForm(container) {
     alert("알림이 울릴 요일을 하나 이상 선택해주세요.");
     return false;
   }
+  if (!db.alarmSounds.length || !container.querySelector("#alarmSoundInput")?.value) {
+    alert("등록된 알림음이 없습니다. 로컬 mp3 폴더에 파일을 넣은 뒤 다시 저장해주세요.");
+    return false;
+  }
   return true;
 }
 
@@ -4016,7 +4044,7 @@ function applySimpleAlarmForm(container, alarm, { activate = false } = {}) {
   alarm.time = getAlarmTimeFromForm(container);
   alarm.message = `${title} 알림입니다.`;
   alarm.spokenMessage = "";
-  alarm.soundId = container.querySelector("#alarmSoundInput")?.value || db.settings.defaultSoundId || DEFAULT_ALARM_SOUND_ID;
+  alarm.soundId = resolveAvailableAlarmSoundId(container.querySelector("#alarmSoundInput")?.value || db.settings.defaultSoundId, db.alarmSounds);
   alarm.snoozeMinutes = 10;
   alarm.repeatDays = getAlarmDaysFromForm(container);
   if (activate) {
