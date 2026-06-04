@@ -911,6 +911,45 @@ th {
   margin-top: 14px;
 }
 
+.alarm-window-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(160px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.alarm-window-grid small {
+  grid-column: 1 / -1;
+  margin-top: -4px;
+}
+
+.alarm-interval-stepper {
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: 46px minmax(120px, 1fr) 46px;
+  gap: 8px;
+  align-items: center;
+}
+
+.alarm-interval-stepper .button {
+  width: 46px;
+  min-height: 44px;
+  padding: 0;
+  font-size: 22px;
+}
+
+.alarm-interval-stepper strong {
+  min-height: 44px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f7fafb;
+  font-size: 16px;
+  text-align: center;
+}
+
 .alarm-volume-control {
   min-height: 48px;
   display: grid;
@@ -2129,6 +2168,7 @@ th {
   .alarm-admin-panel,
   .alarm-form-grid,
   .alarm-tuning-grid,
+  .alarm-window-grid,
   .ops-admin-panel,
   .manager-summary-grid,
   .summary-columns {

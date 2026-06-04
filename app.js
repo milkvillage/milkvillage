@@ -30,7 +30,6 @@ const timeSelectOptions = Array.from({ length: 49 }, (_, index) => {
   const minute = totalMinutes % 60;
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 });
-const alarmIntervalOptions = [0, ...Array.from({ length: 24 }, (_, index) => (index + 1) * 30)];
 const LOG_RETENTION_DAYS = {
   alarmEventLogs: 30,
   inventoryTransactions: 90,
@@ -622,6 +621,8 @@ function normalizeAlarm(alarm) {
     soundId,
     repeatDays: normalizeAlarmDays(alarm.repeatDays),
     intervalMinutes: normalizeAlarmIntervalMinutes(alarm.intervalMinutes),
+    openTime: normalizeAlarmWindowTime(alarm.openTime, "00:00"),
+    closeTime: normalizeAlarmWindowTime(alarm.closeTime, "24:00"),
     volume: normalizeAlarmVolume(alarm.volume),
     snoozeMinutes: 10,
     isDraft,
@@ -655,6 +656,10 @@ function normalizeAlarmVolume(value) {
   const volume = Number(value);
   if (!Number.isFinite(volume)) return 1;
   return Math.min(1, Math.max(0, volume));
+}
+
+function normalizeAlarmWindowTime(value, fallback) {
+  return normalizeTimeValue(value) || fallback;
 }
 
 function hasKoreanText(value) {
@@ -1053,6 +1058,8 @@ function makeAlarm(id, title, message, time) {
     repeatDays: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
     soundId: DEFAULT_ALARM_SOUND_ID,
     intervalMinutes: 0,
+    openTime: "00:00",
+    closeTime: "24:00",
     volume: 1,
     isActive: true,
     requiresAcknowledgement: true,
@@ -1103,14 +1110,36 @@ function formatAlarmIntervalSummary(minutes) {
   return `${hours}시간${restMinutes ? ` ${restMinutes}분` : ""}마다`;
 }
 
-function renderAlarmIntervalOptions(selectedMinutes) {
+function formatAlarmIntervalControlValue(minutes) {
+  return formatAlarmIntervalSummary(minutes) || "반복 없음";
+}
+
+function renderAlarmIntervalStepper(selectedMinutes) {
   const normalizedMinutes = normalizeAlarmIntervalMinutes(selectedMinutes);
-  return alarmIntervalOptions
-    .map((minutes) => {
-      const label = minutes ? formatAlarmIntervalSummary(minutes) : "반복 없음";
-      return `<option value="${minutes}" ${minutes === normalizedMinutes ? "selected" : ""}>${label}</option>`;
-    })
-    .join("");
+  return `
+    <div class="alarm-interval-stepper">
+      <button class="button button--ghost button--small" type="button" data-alarm-interval-step="-30" aria-label="반복 간격 30분 줄이기">-</button>
+      <input id="alarmIntervalInput" type="hidden" value="${normalizedMinutes}" />
+      <strong id="alarmIntervalValue">${escapeHtml(formatAlarmIntervalControlValue(normalizedMinutes))}</strong>
+      <button class="button button--ghost button--small" type="button" data-alarm-interval-step="30" aria-label="반복 간격 30분 늘리기">+</button>
+    </div>
+  `;
+}
+
+function renderAlarmWindowTimeSelect(id, selectedValue, label, fallback) {
+  const normalizedValue = normalizeAlarmWindowTime(selectedValue, fallback);
+  return `
+    <select id="${escapeAttr(id)}" aria-label="${escapeAttr(label)}">
+      ${timeSelectOptions.map((time) => `<option value="${time}" ${time === normalizedValue ? "selected" : ""}>${time}</option>`).join("")}
+    </select>
+  `;
+}
+
+function formatAlarmWindowSummary(alarm) {
+  const openTime = normalizeAlarmWindowTime(alarm.openTime, "00:00");
+  const closeTime = normalizeAlarmWindowTime(alarm.closeTime, "24:00");
+  if (openTime === "00:00" && closeTime === "24:00") return "";
+  return `${openTime}-${closeTime}`;
 }
 
 function renderAlarmTimeControls(time) {
@@ -1209,6 +1238,14 @@ function getAlarmDaysFromForm(container) {
 
 function getAlarmIntervalFromForm(container) {
   return normalizeAlarmIntervalMinutes(container.querySelector("#alarmIntervalInput")?.value);
+}
+
+function getAlarmOpenTimeFromForm(container) {
+  return normalizeAlarmWindowTime(container.querySelector("#alarmOpenTimeInput")?.value, "00:00");
+}
+
+function getAlarmCloseTimeFromForm(container) {
+  return normalizeAlarmWindowTime(container.querySelector("#alarmCloseTimeInput")?.value, "24:00");
 }
 
 function getAlarmVolumeFromForm(container) {
@@ -3959,7 +3996,7 @@ function renderAlarmsAdmin(container) {
                             ? "저장 전"
                             : `${escapeHtml(formatAlarmTime(item.time))} · ${escapeHtml(formatAlarmDaySummary(item.repeatDays))}${
                                 formatAlarmIntervalSummary(item.intervalMinutes) ? ` · ${escapeHtml(formatAlarmIntervalSummary(item.intervalMinutes))}` : ""
-                              }`
+                              }${formatAlarmWindowSummary(item) ? ` · ${escapeHtml(formatAlarmWindowSummary(item))}` : ""}`
                         }</span>
                       </button>
                     `,
@@ -3992,12 +4029,21 @@ function renderAlarmsAdmin(container) {
               </label>
             </div>
             ${renderAlarmDayControls(alarm.repeatDays)}
+            <div class="alarm-window-grid">
+              <label class="field">
+                <span>오픈 시간</span>
+                ${renderAlarmWindowTimeSelect("alarmOpenTimeInput", alarm.openTime, "오픈 시간", "00:00")}
+              </label>
+              <label class="field">
+                <span>마감 시간</span>
+                ${renderAlarmWindowTimeSelect("alarmCloseTimeInput", alarm.closeTime, "마감 시간", "24:00")}
+              </label>
+              <small class="alarm-sound-description">반복 알림은 오픈 시간 이후, 마감 시간 이전에만 울립니다.</small>
+            </div>
             <div class="alarm-tuning-grid">
               <label class="field">
                 <span>반복 간격</span>
-                <select id="alarmIntervalInput">
-                  ${renderAlarmIntervalOptions(alarm.intervalMinutes)}
-                </select>
+                ${renderAlarmIntervalStepper(alarm.intervalMinutes)}
                 <small class="alarm-sound-description">설정 시간부터 선택한 요일 안에서 반복됩니다.</small>
               </label>
               <label class="field">
@@ -4044,7 +4090,7 @@ function renderAlarmsAdmin(container) {
     alarm.isActive = false;
     db.alarms.push(alarm);
     state.selectedAlarmId = alarm.id;
-    state.savedMessage = "알림 이름, 시간, 요일, 반복 간격, 볼륨, 알림음을 선택한 뒤 저장하면 작동합니다.";
+    state.savedMessage = "알림 이름, 시간, 요일, 오픈/마감 시간, 반복 간격, 볼륨, 알림음을 선택한 뒤 저장하면 작동합니다.";
     saveDb();
     renderAdminScreen();
   });
@@ -4063,6 +4109,16 @@ function renderAlarmsAdmin(container) {
   container.querySelector("#alarmVolumeInput")?.addEventListener("input", (event) => {
     const volumeValue = container.querySelector("#alarmVolumeValue");
     if (volumeValue) volumeValue.textContent = `${event.target.value}%`;
+  });
+  container.querySelectorAll("[data-alarm-interval-step]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const input = container.querySelector("#alarmIntervalInput");
+      const label = container.querySelector("#alarmIntervalValue");
+      if (!input || !label) return;
+      const nextMinutes = normalizeAlarmIntervalMinutes(Number(input.value || 0) + Number(button.dataset.alarmIntervalStep || 0));
+      input.value = String(nextMinutes);
+      label.textContent = formatAlarmIntervalControlValue(nextMinutes);
+    });
   });
   container.querySelector("#deleteAlarm")?.addEventListener("click", () => {
     if (!alarm) return;
@@ -4106,6 +4162,10 @@ function validateAlarmForm(container) {
     alert("등록된 알림음이 없습니다. 로컬 mp3 폴더에 파일을 넣은 뒤 다시 저장해주세요.");
     return false;
   }
+  if (timeToMinutes(getAlarmOpenTimeFromForm(container)) >= timeToMinutes(getAlarmCloseTimeFromForm(container))) {
+    alert("마감 시간은 오픈 시간보다 늦게 설정해주세요.");
+    return false;
+  }
   return true;
 }
 
@@ -4117,6 +4177,8 @@ function applySimpleAlarmForm(container, alarm, { activate = false } = {}) {
   alarm.spokenMessage = "";
   alarm.soundId = resolveAvailableAlarmSoundId(container.querySelector("#alarmSoundInput")?.value || db.settings.defaultSoundId, db.alarmSounds);
   alarm.intervalMinutes = getAlarmIntervalFromForm(container);
+  alarm.openTime = getAlarmOpenTimeFromForm(container);
+  alarm.closeTime = getAlarmCloseTimeFromForm(container);
   alarm.volume = getAlarmVolumeFromForm(container);
   alarm.snoozeMinutes = 10;
   alarm.repeatDays = getAlarmDaysFromForm(container);
@@ -4422,6 +4484,8 @@ function triggerAlarm(alarm, source = "schedule", scheduledAt = "") {
     soundId: alarm.soundId || db.settings.defaultSoundId,
     volume: normalizeAlarmVolume(alarm.volume),
     intervalMinutes: normalizeAlarmIntervalMinutes(alarm.intervalMinutes),
+    openTime: normalizeAlarmWindowTime(alarm.openTime, "00:00"),
+    closeTime: normalizeAlarmWindowTime(alarm.closeTime, "24:00"),
     snoozeMinutes: Number(alarm.snoozeMinutes || 10),
     triggeredAt,
     acknowledgedAt: "",
@@ -4483,6 +4547,8 @@ function getAlarmDisplayFromEvent(eventLog) {
     soundId: eventLog?.soundId || alarm?.soundId || db.settings.defaultSoundId,
     volume: normalizeAlarmVolume(eventLog?.volume ?? alarm?.volume),
     intervalMinutes: normalizeAlarmIntervalMinutes(eventLog?.intervalMinutes ?? alarm?.intervalMinutes),
+    openTime: normalizeAlarmWindowTime(eventLog?.openTime ?? alarm?.openTime, "00:00"),
+    closeTime: normalizeAlarmWindowTime(eventLog?.closeTime ?? alarm?.closeTime, "24:00"),
     snoozeMinutes: Number(eventLog?.snoozeMinutes || alarm?.snoozeMinutes || 10),
   };
 }
@@ -4542,7 +4608,7 @@ function checkAlarms() {
     .filter((alarm) => isScheduledAlarmEnabled(alarm) && alarm.repeatDays.includes(day))
     .forEach((alarm) => {
       const scheduledAt = getScheduledAlarmDate(alarm, now);
-      const isDue = scheduledAt <= now && now - scheduledAt < 2 * 60 * 1000;
+      const isDue = isAlarmScheduledInsideWindow(alarm, scheduledAt) && scheduledAt <= now && now - scheduledAt < 2 * 60 * 1000;
       const alreadyTriggered = Boolean(findAlarmEventForMinute(alarm.id, scheduledAt));
       if (isDue && !alreadyTriggered) triggerAlarm(alarm, "schedule", scheduledAt.toISOString());
     });
@@ -4571,6 +4637,13 @@ function getScheduledAlarmDate(alarm, date = new Date()) {
     scheduledAt.setTime(scheduledAt.getTime() + repeatCount * intervalMs);
   }
   return scheduledAt;
+}
+
+function isAlarmScheduledInsideWindow(alarm, scheduledAt) {
+  const scheduledMinutes = scheduledAt.getHours() * 60 + scheduledAt.getMinutes();
+  const openMinutes = timeToMinutes(alarm.openTime || "00:00") ?? 0;
+  const closeMinutes = timeToMinutes(alarm.closeTime || "24:00") ?? 24 * 60;
+  return scheduledMinutes >= openMinutes && scheduledMinutes < closeMinutes;
 }
 
 function markSpeechReady() {
