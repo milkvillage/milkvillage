@@ -326,6 +326,10 @@ function formatTimeRange(startTime, endTime) {
   return startTime && endTime ? `${startTime}-${endTime}` : "예정 없음";
 }
 
+function formatClockRange(startTime, endTime) {
+  return startTime && endTime ? `${startTime}~${endTime}` : "";
+}
+
 function formatDurationText(minutes) {
   if (!Number.isFinite(minutes) || minutes < 0) return "";
   const hours = Math.floor(minutes / 60);
@@ -2262,16 +2266,14 @@ function buildAttendanceDraft(status, container) {
 }
 
 function attendanceConfirmSummaryRows(draft) {
-  const scheduledText = formatTimeRange(draft.scheduledStart, draft.scheduledEnd) || "예정 시간 없음";
-  const actualText = draft.status === "present" ? formatWorkDuration(draft.actualStart, draft.actualEnd) || "실제 시간 없음" : "결근";
-  const timingText = draft.status === "present" ? attendanceTimingSummary(draft) : "";
+  const timeText = draft.status === "present" ? formatClockRange(draft.actualStart, draft.actualEnd) || "시간 없음" : "결근";
+  const workDurationText = draft.status === "present" ? formatWorkDuration(draft.actualStart, draft.actualEnd) || "시간 없음" : "0시간";
   return [
     ["근무자", draft.staffName],
     ["날짜", formatAttendanceDate(draft.date)],
     ["구분", attendanceStatusLabel(draft.status)],
-    ["예정 근무시간", scheduledText],
-    ["실제 근무시간", actualText],
-    ...(timingText ? [["근무시간", timingText]] : []),
+    ["시간", timeText],
+    ["근무시간", workDurationText],
     ...(draft.adjustmentReason ? [["변경 사유", draft.adjustmentReason]] : []),
   ];
 }
