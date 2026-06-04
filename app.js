@@ -153,6 +153,7 @@ let alarmSpeechRetryTimer = null;
 let alarmSoundRetryTimer = null;
 let speechKeepAliveTimer = null;
 let activeAlarmSoundEventId = "";
+let activeAlarmSoundVolume = null;
 let alarmAudio = null;
 let previewAudio = null;
 let lastSpeechUnlockAttemptAt = 0;
@@ -4140,11 +4141,12 @@ function renderAlarmsAdmin(container) {
     applySimpleAlarmForm(container, alarm, { activate: true });
     state.savedMessage = "저장 완료";
     saveDb();
+    restartActiveAlarmIfMatching(alarm);
     state.selectedAlarmId = alarm.id;
     renderAdminScreen();
   });
   container.querySelectorAll("[data-test-alarm-sound]").forEach((button) => {
-    button.addEventListener("click", () => testAlarmSound(button.dataset.testAlarmSound));
+    button.addEventListener("click", () => testAlarmSound(button.dataset.testAlarmSound, { volume: getAlarmVolumeFromForm(container) }));
   });
 }
 
@@ -4471,13 +4473,31 @@ function triggerAlarm(alarm, source = "schedule", scheduledAt = "") {
   const triggeredAt = scheduledAt || nowIso();
   const existingEvent = findAlarmEventForMinute(alarm.id, new Date(triggeredAt));
   if (existingEvent?.status === "triggered") {
+    updateAlarmEventFromAlarm(existingEvent, alarm, { source, triggeredAt });
     state.activeAlarmEventId = existingEvent.id;
-    showAlarmModal(getAlarmDisplayFromEvent(existingEvent));
+    saveDb();
+    const displayAlarm = getAlarmDisplayFromEvent(existingEvent);
+    showAlarmModal(displayAlarm, { playSound: false });
+    startAlarmSound(displayAlarm, { forceRestart: true, immediate: true });
     return;
   }
 
-  const eventLog = {
-    id: uid("alarm_event"),
+  const eventLog = updateAlarmEventFromAlarm(
+    {
+      id: uid("alarm_event"),
+      alarmId: alarm.id,
+    },
+    alarm,
+    { source, triggeredAt },
+  );
+  db.alarmEventLogs.push(eventLog);
+  state.activeAlarmEventId = eventLog.id;
+  saveDb();
+  showAlarmModal(getAlarmDisplayFromEvent(eventLog));
+}
+
+function updateAlarmEventFromAlarm(eventLog, alarm, { source = "schedule", triggeredAt = nowIso() } = {}) {
+  Object.assign(eventLog, {
     alarmId: alarm.id,
     alarmTitle: alarm.title,
     alarmMessage: alarm.message,
@@ -4496,11 +4516,8 @@ function triggerAlarm(alarm, source = "schedule", scheduledAt = "") {
     source,
     createdAt: triggeredAt,
     updatedAt: triggeredAt,
-  };
-  db.alarmEventLogs.push(eventLog);
-  state.activeAlarmEventId = eventLog.id;
-  saveDb();
-  showAlarmModal(getAlarmDisplayFromEvent(eventLog));
+  });
+  return eventLog;
 }
 
 function showAlarmModal(alarm, { playSound = true, immediate = true } = {}) {
@@ -4552,6 +4569,16 @@ function getAlarmDisplayFromEvent(eventLog) {
     closeTime: normalizeAlarmWindowTime(eventLog?.closeTime ?? alarm?.closeTime, "24:00"),
     snoozeMinutes: Number(eventLog?.snoozeMinutes || alarm?.snoozeMinutes || 10),
   };
+}
+
+function restartActiveAlarmIfMatching(alarm) {
+  const eventLog = db.alarmEventLogs.find((log) => log.id === state.activeAlarmEventId && log.alarmId === alarm.id && log.status === "triggered");
+  if (!eventLog) return;
+  updateAlarmEventFromAlarm(eventLog, alarm, { source: eventLog.source || "schedule", triggeredAt: eventLog.triggeredAt || nowIso() });
+  saveDb();
+  const displayAlarm = getAlarmDisplayFromEvent(eventLog);
+  showAlarmModal(displayAlarm, { playSound: false });
+  startAlarmSound(displayAlarm, { forceRestart: true, immediate: true });
 }
 
 function syncAlarmModalFromRemote(source = "realtime") {
@@ -4743,12 +4770,14 @@ function setupAutomaticAudioUnlock() {
 
 function startAlarmSound(alarm, { forceRestart = false, immediate = false } = {}) {
   const soundEventId = state.activeAlarmEventId || `${alarm?.id || "alarm"}:${alarm?.time || ""}`;
-  if (!forceRestart && activeAlarmSoundEventId === soundEventId) return;
+  const playbackVolume = getAlarmPlaybackVolume(alarm);
+  if (!forceRestart && activeAlarmSoundEventId === soundEventId && activeAlarmSoundVolume === playbackVolume) return;
   stopAlarmSound();
   activeAlarmSoundEventId = soundEventId;
+  activeAlarmSoundVolume = playbackVolume;
   requestWakeLock();
   primeAudioOutput();
-  playAlarmFileSound(alarm, { eventId: soundEventId });
+  playAlarmFileSound(alarm, { eventId: soundEventId, volume: playbackVolume });
 }
 
 function stopAlarmSound() {
@@ -4759,6 +4788,7 @@ function stopAlarmSound() {
   alarmSpeechRetryTimer = null;
   alarmSoundRetryTimer = null;
   activeAlarmSoundEventId = "";
+  activeAlarmSoundVolume = null;
   pendingSpeech = null;
   stopAlarmFileSound();
   try {
@@ -4779,7 +4809,11 @@ function stopAlarmFileSound() {
   alarmAudio = null;
 }
 
-function playAlarmFileSound(alarm, { eventId = "" } = {}) {
+function getAlarmPlaybackVolume(alarm, sound = null) {
+  return normalizeAlarmVolume(alarm?.volume ?? sound?.volume);
+}
+
+function playAlarmFileSound(alarm, { eventId = "", volume = null } = {}) {
   const sound = getVoicePreset(alarm.soundId || db.settings.defaultSoundId);
   if (!sound?.url) return false;
   const soundEventId = eventId || activeAlarmSoundEventId;
@@ -4787,7 +4821,7 @@ function playAlarmFileSound(alarm, { eventId = "" } = {}) {
   alarmAudio = new Audio(sound.url);
   alarmAudio.loop = true;
   alarmAudio.preload = "auto";
-  alarmAudio.volume = normalizeAlarmVolume(alarm.volume ?? sound.volume);
+  alarmAudio.volume = volume === null ? getAlarmPlaybackVolume(alarm, sound) : normalizeAlarmVolume(volume);
   alarmAudio.addEventListener("playing", markSpeechReady, { once: true });
   alarmAudio.addEventListener(
     "error",
@@ -4815,7 +4849,7 @@ function playAlarmFileSound(alarm, { eventId = "" } = {}) {
   return true;
 }
 
-function testAlarmSound(soundId) {
+function testAlarmSound(soundId, { volume = null } = {}) {
   const sound = getVoicePreset(soundId);
   if (!sound?.url) {
     alert("알림음 파일 URL이 없습니다.");
@@ -4824,7 +4858,7 @@ function testAlarmSound(soundId) {
   try {
     previewAudio?.pause();
     previewAudio = new Audio(sound.url);
-    previewAudio.volume = Number(sound.volume || 1);
+    previewAudio.volume = normalizeAlarmVolume(volume ?? sound.volume);
     previewAudio.play().then(markSpeechReady).catch(() => {
       markSpeechOff();
       alert("알림음을 재생할 수 없습니다. 화면을 한 번 터치한 뒤 다시 시도해주세요.");
