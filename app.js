@@ -326,6 +326,20 @@ function formatTimeRange(startTime, endTime) {
   return startTime && endTime ? `${startTime}-${endTime}` : "예정 없음";
 }
 
+function formatDurationText(minutes) {
+  if (!Number.isFinite(minutes) || minutes < 0) return "";
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  if (hours && remainingMinutes) return `${hours}시간 ${remainingMinutes}분`;
+  if (hours) return `${hours}시간`;
+  return `${remainingMinutes}분`;
+}
+
+function formatWorkDuration(startTime, endTime) {
+  const minutes = minutesBetween(startTime, endTime);
+  return minutes === null ? "" : formatDurationText(minutes);
+}
+
 function renderTimeSelect(attributes = {}, selectedValue = "", label = "") {
   const normalizedValue = normalizeTimeValue(selectedValue);
   const attributeText = Object.entries(attributes)
@@ -2102,7 +2116,7 @@ function renderAttendanceScreen() {
               <div class="signature-actions">
                 <button class="button ${presentSelected ? "button--primary is-selected" : "button--ghost"}" type="button" data-attendance-status="present" aria-pressed="${presentSelected ? "true" : "false"}" ${selectedStaff && !employeeSignatureLocked ? "" : "disabled"}>출근</button>
                 <button class="button ${absentSelected ? "button--danger is-selected" : "button--ghost"}" type="button" data-attendance-status="absent" aria-pressed="${absentSelected ? "true" : "false"}" ${selectedStaff && !employeeSignatureLocked ? "" : "disabled"}>결근</button>
-                <button class="button button--primary" type="button" id="confirmEmployeeAttendance" ${pendingAttendanceStatus && selectedStaff && !employeeSignatureLocked ? "" : "disabled"}>확인</button>
+                <button class="button button--confirm" type="button" id="confirmEmployeeAttendance" ${pendingAttendanceStatus && selectedStaff && !employeeSignatureLocked ? "" : "disabled"}>확인</button>
                 <span class="signature-help" id="employeeAttendanceHelp">${
                   employeeSignatureLocked
                     ? "근무자 기록이 저장되어 수정할 수 없습니다."
@@ -2249,7 +2263,7 @@ function buildAttendanceDraft(status, container) {
 
 function attendanceConfirmSummaryRows(draft) {
   const scheduledText = formatTimeRange(draft.scheduledStart, draft.scheduledEnd) || "예정 시간 없음";
-  const actualText = draft.status === "present" ? formatTimeRange(draft.actualStart, draft.actualEnd) || "실제 시간 없음" : "결근";
+  const actualText = draft.status === "present" ? formatWorkDuration(draft.actualStart, draft.actualEnd) || "실제 시간 없음" : "결근";
   const timingText = draft.status === "present" ? attendanceTimingSummary(draft) : "";
   return [
     ["근무자", draft.staffName],
@@ -2257,7 +2271,7 @@ function attendanceConfirmSummaryRows(draft) {
     ["구분", attendanceStatusLabel(draft.status)],
     ["예정 근무시간", scheduledText],
     ["실제 근무시간", actualText],
-    ...(timingText ? [["근무시간 요약", timingText]] : []),
+    ...(timingText ? [["근무시간", timingText]] : []),
     ...(draft.adjustmentReason ? [["변경 사유", draft.adjustmentReason]] : []),
   ];
 }

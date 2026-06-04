@@ -1226,6 +1226,15 @@ th {
   color: white;
 }
 
+.button--confirm {
+  background: #b7791f;
+  color: white;
+}
+
+.button--confirm:hover {
+  background: #8a5b10;
+}
+
 .button--ghost {
   background: #eef2f4;
 }
