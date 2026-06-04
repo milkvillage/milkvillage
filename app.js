@@ -2059,7 +2059,7 @@ function renderAttendanceScreen() {
               <canvas class="signature-pad" id="managerSignaturePad" aria-label="매니저 서명 입력"></canvas>
               <div class="signature-actions">
                 <button class="button button--primary" type="button" id="confirmManagerAttendance" ${managerCanSign ? "" : "disabled"}>확인</button>
-                <span class="signature-help">${managerCanSign ? "출근 확인 서명을 입력한 뒤 확인하세요." : "근무자 출근 기록 후 매니저 확인이 가능합니다."}</span>
+                <span class="signature-help">${managerCanSign ? "관리자 PIN 확인 후 서명하고 확인하세요." : "근무자 출근 기록 후 매니저 확인이 가능합니다."}</span>
               </div>
             </div>
           </div>
@@ -2095,6 +2095,8 @@ function renderAttendanceScreen() {
   });
   setupSignaturePad(els.workArea.querySelector("#managerSignaturePad"), selectedRecord?.managerSignature || "", {
     locked: managerSignatureLocked,
+    requirePin: managerCanSign,
+    pinPrompt: "매니저 서명을 입력하려면 관리자 PIN을 입력해주세요.",
   });
   els.workArea.querySelectorAll("[data-clear-signature]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -2387,6 +2389,7 @@ function isSignatureImage(value) {
 function setupSignaturePad(canvas, initialData = "", options = {}) {
   if (!canvas) return;
   const locked = Boolean(options.locked);
+  const requirePin = Boolean(options.requirePin);
   const context = canvas.getContext("2d");
   const ratio = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
@@ -2405,6 +2408,8 @@ function setupSignaturePad(canvas, initialData = "", options = {}) {
   canvas.dataset.signatureDirty = "0";
   canvas.dataset.signatureLoaded = "0";
   canvas.dataset.locked = locked ? "1" : "0";
+  canvas.dataset.requiresPin = requirePin ? "1" : "0";
+  canvas.dataset.pinAuthorized = requirePin ? "0" : "1";
   canvas.classList.toggle("is-locked", locked);
 
   if (isSignatureImage(initialData)) {
@@ -2433,6 +2438,15 @@ function setupSignaturePad(canvas, initialData = "", options = {}) {
   };
   const startDrawing = (event) => {
     event.preventDefault();
+    if (canvas.dataset.requiresPin === "1" && canvas.dataset.pinAuthorized !== "1") {
+      const pin = prompt(options.pinPrompt || "관리자 PIN을 입력해주세요.");
+      if (pin === null) return;
+      if (pin !== db.settings.adminPin) {
+        alert("관리자 PIN이 맞지 않습니다.");
+        return;
+      }
+      canvas.dataset.pinAuthorized = "1";
+    }
     const point = getPoint(event);
     isDrawing = true;
     canvas.dataset.hasSignature = "1";
