@@ -904,6 +904,31 @@ th {
   gap: 8px;
 }
 
+.alarm-tuning-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(210px, 0.7fr);
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.alarm-volume-control {
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 56px;
+  gap: 10px;
+  align-items: center;
+}
+
+.alarm-volume-control input {
+  width: 100%;
+  min-height: 36px;
+}
+
+.alarm-volume-control strong {
+  text-align: right;
+  font-size: 16px;
+}
+
 .alarm-days-field {
   margin: 14px 0 0;
   padding: 0;
@@ -2103,6 +2128,7 @@ th {
   .handover-form,
   .alarm-admin-panel,
   .alarm-form-grid,
+  .alarm-tuning-grid,
   .ops-admin-panel,
   .manager-summary-grid,
   .summary-columns {

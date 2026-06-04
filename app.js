@@ -30,6 +30,7 @@ const timeSelectOptions = Array.from({ length: 49 }, (_, index) => {
   const minute = totalMinutes % 60;
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 });
+const alarmIntervalOptions = [0, ...Array.from({ length: 24 }, (_, index) => (index + 1) * 30)];
 const LOG_RETENTION_DAYS = {
   alarmEventLogs: 30,
   inventoryTransactions: 90,
@@ -620,6 +621,8 @@ function normalizeAlarm(alarm) {
     time: normalizeAlarmTime(alarm.time),
     soundId,
     repeatDays: normalizeAlarmDays(alarm.repeatDays),
+    intervalMinutes: normalizeAlarmIntervalMinutes(alarm.intervalMinutes),
+    volume: normalizeAlarmVolume(alarm.volume),
     snoozeMinutes: 10,
     isDraft,
     isActive: alarm.isActive !== false && !isDraft,
@@ -639,6 +642,19 @@ function normalizeAlarmDays(days) {
   if (!Array.isArray(days)) return [...alarmDayOrder];
   const uniqueDays = alarmDayOrder.filter((day) => days.includes(day));
   return uniqueDays.length ? uniqueDays : [];
+}
+
+function normalizeAlarmIntervalMinutes(value) {
+  const minutes = Number(value || 0);
+  if (!Number.isFinite(minutes) || minutes < 30) return 0;
+  const rounded = Math.round(minutes / 30) * 30;
+  return Math.min(720, Math.max(30, rounded));
+}
+
+function normalizeAlarmVolume(value) {
+  const volume = Number(value);
+  if (!Number.isFinite(volume)) return 1;
+  return Math.min(1, Math.max(0, volume));
 }
 
 function hasKoreanText(value) {
@@ -1036,6 +1052,8 @@ function makeAlarm(id, title, message, time) {
     time,
     repeatDays: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
     soundId: DEFAULT_ALARM_SOUND_ID,
+    intervalMinutes: 0,
+    volume: 1,
     isActive: true,
     requiresAcknowledgement: true,
     snoozeMinutes: 10,
@@ -1074,6 +1092,25 @@ function formatAlarmDaySummary(days) {
   if (normalizedDays.length === alarmDayOrder.length) return "매일";
   if (!normalizedDays.length) return "요일 없음";
   return normalizedDays.map((day) => alarmDayLabels[day]).join("");
+}
+
+function formatAlarmIntervalSummary(minutes) {
+  const normalizedMinutes = normalizeAlarmIntervalMinutes(minutes);
+  if (!normalizedMinutes) return "";
+  const hours = Math.floor(normalizedMinutes / 60);
+  const restMinutes = normalizedMinutes % 60;
+  if (!hours) return `${normalizedMinutes}분마다`;
+  return `${hours}시간${restMinutes ? ` ${restMinutes}분` : ""}마다`;
+}
+
+function renderAlarmIntervalOptions(selectedMinutes) {
+  const normalizedMinutes = normalizeAlarmIntervalMinutes(selectedMinutes);
+  return alarmIntervalOptions
+    .map((minutes) => {
+      const label = minutes ? formatAlarmIntervalSummary(minutes) : "반복 없음";
+      return `<option value="${minutes}" ${minutes === normalizedMinutes ? "selected" : ""}>${label}</option>`;
+    })
+    .join("");
 }
 
 function renderAlarmTimeControls(time) {
@@ -1168,6 +1205,14 @@ function getAlarmTimeFromForm(container) {
 
 function getAlarmDaysFromForm(container) {
   return [...container.querySelectorAll("[data-alarm-day]:checked")].map((input) => input.value);
+}
+
+function getAlarmIntervalFromForm(container) {
+  return normalizeAlarmIntervalMinutes(container.querySelector("#alarmIntervalInput")?.value);
+}
+
+function getAlarmVolumeFromForm(container) {
+  return normalizeAlarmVolume(Number(container.querySelector("#alarmVolumeInput")?.value || 100) / 100);
 }
 
 function isScheduledAlarmEnabled(alarm) {
@@ -3909,7 +3954,13 @@ function renderAlarmsAdmin(container) {
                     (item) => `
                       <button class="list-button alarm-list-button ${alarm && item.id === alarm.id ? "is-active" : ""}" type="button" data-select-alarm="${item.id}">
                         <strong>${escapeHtml(getAlarmListTitle(item))}</strong>
-                        <span>${item.isDraft ? "저장 전" : `${escapeHtml(formatAlarmTime(item.time))} · ${escapeHtml(formatAlarmDaySummary(item.repeatDays))}`}</span>
+                        <span>${
+                          item.isDraft
+                            ? "저장 전"
+                            : `${escapeHtml(formatAlarmTime(item.time))} · ${escapeHtml(formatAlarmDaySummary(item.repeatDays))}${
+                                formatAlarmIntervalSummary(item.intervalMinutes) ? ` · ${escapeHtml(formatAlarmIntervalSummary(item.intervalMinutes))}` : ""
+                              }`
+                        }</span>
                       </button>
                     `,
                   )
@@ -3941,6 +3992,22 @@ function renderAlarmsAdmin(container) {
               </label>
             </div>
             ${renderAlarmDayControls(alarm.repeatDays)}
+            <div class="alarm-tuning-grid">
+              <label class="field">
+                <span>반복 간격</span>
+                <select id="alarmIntervalInput">
+                  ${renderAlarmIntervalOptions(alarm.intervalMinutes)}
+                </select>
+                <small class="alarm-sound-description">설정 시간부터 선택한 요일 안에서 반복됩니다.</small>
+              </label>
+              <label class="field">
+                <span>볼륨</span>
+                <div class="alarm-volume-control">
+                  <input id="alarmVolumeInput" type="range" min="0" max="100" step="5" value="${Math.round(normalizeAlarmVolume(alarm.volume) * 100)}" />
+                  <strong id="alarmVolumeValue">${Math.round(normalizeAlarmVolume(alarm.volume) * 100)}%</strong>
+                </div>
+              </label>
+            </div>
             <label class="field alarm-sound-field">
               <span>알림음</span>
               <select id="alarmSoundInput" ${db.alarmSounds.length ? "" : "disabled"}>
@@ -3977,7 +4044,7 @@ function renderAlarmsAdmin(container) {
     alarm.isActive = false;
     db.alarms.push(alarm);
     state.selectedAlarmId = alarm.id;
-    state.savedMessage = "알림 이름, 시간, 요일, 알림음을 선택한 뒤 저장하면 작동합니다.";
+    state.savedMessage = "알림 이름, 시간, 요일, 반복 간격, 볼륨, 알림음을 선택한 뒤 저장하면 작동합니다.";
     saveDb();
     renderAdminScreen();
   });
@@ -3992,6 +4059,10 @@ function renderAlarmsAdmin(container) {
     const description = container.querySelector("#alarmSoundDescription");
     if (!description) return;
     description.textContent = getAlarmSoundDisplay(getVoicePreset(event.target.value)).description;
+  });
+  container.querySelector("#alarmVolumeInput")?.addEventListener("input", (event) => {
+    const volumeValue = container.querySelector("#alarmVolumeValue");
+    if (volumeValue) volumeValue.textContent = `${event.target.value}%`;
   });
   container.querySelector("#deleteAlarm")?.addEventListener("click", () => {
     if (!alarm) return;
@@ -4045,6 +4116,8 @@ function applySimpleAlarmForm(container, alarm, { activate = false } = {}) {
   alarm.message = `${title} 알림입니다.`;
   alarm.spokenMessage = "";
   alarm.soundId = resolveAvailableAlarmSoundId(container.querySelector("#alarmSoundInput")?.value || db.settings.defaultSoundId, db.alarmSounds);
+  alarm.intervalMinutes = getAlarmIntervalFromForm(container);
+  alarm.volume = getAlarmVolumeFromForm(container);
   alarm.snoozeMinutes = 10;
   alarm.repeatDays = getAlarmDaysFromForm(container);
   if (activate) {
@@ -4347,6 +4420,8 @@ function triggerAlarm(alarm, source = "schedule", scheduledAt = "") {
     alarmMessage: alarm.message,
     spokenMessage: alarm.spokenMessage || alarm.message || alarm.title,
     soundId: alarm.soundId || db.settings.defaultSoundId,
+    volume: normalizeAlarmVolume(alarm.volume),
+    intervalMinutes: normalizeAlarmIntervalMinutes(alarm.intervalMinutes),
     snoozeMinutes: Number(alarm.snoozeMinutes || 10),
     triggeredAt,
     acknowledgedAt: "",
@@ -4406,6 +4481,8 @@ function getAlarmDisplayFromEvent(eventLog) {
     message: eventLog?.alarmMessage || alarm?.message || "확인이 필요한 알림입니다.",
     spokenMessage: eventLog?.spokenMessage || alarm?.spokenMessage || alarm?.message || eventLog?.alarmMessage || eventLog?.alarmTitle || "확인이 필요한 알림입니다.",
     soundId: eventLog?.soundId || alarm?.soundId || db.settings.defaultSoundId,
+    volume: normalizeAlarmVolume(eventLog?.volume ?? alarm?.volume),
+    intervalMinutes: normalizeAlarmIntervalMinutes(eventLog?.intervalMinutes ?? alarm?.intervalMinutes),
     snoozeMinutes: Number(eventLog?.snoozeMinutes || alarm?.snoozeMinutes || 10),
   };
 }
@@ -4486,6 +4563,13 @@ function getScheduledAlarmDate(alarm, date = new Date()) {
   const [hours = 0, minutes = 0] = String(alarm.time || "00:00").split(":").map(Number);
   const scheduledAt = new Date(date);
   scheduledAt.setHours(Number.isFinite(hours) ? hours : 0, Number.isFinite(minutes) ? minutes : 0, 0, 0);
+  const intervalMinutes = normalizeAlarmIntervalMinutes(alarm.intervalMinutes);
+  if (intervalMinutes && scheduledAt <= date) {
+    const elapsed = date - scheduledAt;
+    const intervalMs = intervalMinutes * 60 * 1000;
+    const repeatCount = Math.floor(elapsed / intervalMs);
+    scheduledAt.setTime(scheduledAt.getTime() + repeatCount * intervalMs);
+  }
   return scheduledAt;
 }
 
@@ -4629,7 +4713,7 @@ function playAlarmFileSound(alarm, { eventId = "" } = {}) {
   alarmAudio = new Audio(sound.url);
   alarmAudio.loop = true;
   alarmAudio.preload = "auto";
-  alarmAudio.volume = Number(sound.volume || 1);
+  alarmAudio.volume = normalizeAlarmVolume(alarm.volume ?? sound.volume);
   alarmAudio.addEventListener("playing", markSpeechReady, { once: true });
   alarmAudio.addEventListener(
     "error",
