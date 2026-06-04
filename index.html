@@ -117,6 +117,18 @@
       </section>
     </div>
 
+    <div class="modal-backdrop" id="attendanceConfirmModal" hidden>
+      <section class="modal modal--attendance-confirm" role="dialog" aria-modal="true" aria-labelledby="attendanceConfirmTitle">
+        <h2 id="attendanceConfirmTitle">근퇴 최종 확인</h2>
+        <div class="attendance-confirm-summary" id="attendanceConfirmSummary"></div>
+        <p class="attendance-confirm-warning">최종확인을 누르면 근무자 서명과 출근/결근 기록은 수정할 수 없습니다.</p>
+        <div class="modal-actions">
+          <button class="button button--ghost" id="attendanceConfirmClose" type="button">다시 선택</button>
+          <button class="button button--primary" id="attendanceConfirmFinal" type="button">최종확인</button>
+        </div>
+      </section>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script>
       window.__MILK_VILLAGE_VERSION__.then((version) => {

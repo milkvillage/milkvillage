@@ -180,6 +180,9 @@ const state = {
   operatorName: "",
   loadingVariantId: null,
   pendingCancelBatchId: null,
+  pendingAttendanceStatus: null,
+  pendingAttendanceKey: "",
+  pendingAttendanceDraft: null,
   activeAlarmEventId: null,
   audioUnlocked: false,
   savedMessage: "",
@@ -205,6 +208,10 @@ const els = {
   alarmSnooze: document.querySelector("#alarmSnooze"),
   soundHelp: document.querySelector("#soundHelp"),
   soundHelpButton: document.querySelector("#soundHelpButton"),
+  attendanceConfirmModal: document.querySelector("#attendanceConfirmModal"),
+  attendanceConfirmSummary: document.querySelector("#attendanceConfirmSummary"),
+  attendanceConfirmClose: document.querySelector("#attendanceConfirmClose"),
+  attendanceConfirmFinal: document.querySelector("#attendanceConfirmFinal"),
 };
 
 let db = loadDb();
@@ -1460,6 +1467,10 @@ function getAttendanceRecord(date, staffId) {
   return (db.operations?.attendanceRecords || []).find((record) => record.date === date && record.staffId === staffId);
 }
 
+function getAttendanceDraftKey(date, staffId) {
+  return `${date || ""}|${staffId || ""}`;
+}
+
 function getVariantsForRecipe(recipeId, activeOnly = true) {
   return db.recipeVariants
     .filter((variant) => variant.recipeId === recipeId && (!activeOnly || variant.isActive))
@@ -2017,6 +2028,14 @@ function renderAttendanceScreen() {
     selectedRecord?.status === "present" && selectedRecord.employeeSignature && !selectedRecord.managerSignature,
   );
   const managerSignatureLocked = !managerCanSign;
+  const attendanceDraftKey = selectedStaff ? getAttendanceDraftKey(selectedDate, selectedStaff.id) : "";
+  if (!attendanceDraftKey || selectedRecord || state.pendingAttendanceKey !== attendanceDraftKey) {
+    state.pendingAttendanceStatus = null;
+    state.pendingAttendanceKey = attendanceDraftKey;
+  }
+  const pendingAttendanceStatus = employeeSignatureLocked ? null : state.pendingAttendanceStatus;
+  const presentSelected = pendingAttendanceStatus === "present";
+  const absentSelected = pendingAttendanceStatus === "absent";
 
   els.workArea.innerHTML = `
     <section class="attendance-screen" aria-label="근퇴기록">
@@ -2081,8 +2100,16 @@ function renderAttendanceScreen() {
               </div>
               <canvas class="signature-pad" id="employeeSignaturePad" aria-label="근무자 서명 입력"></canvas>
               <div class="signature-actions">
-                <button class="button button--primary" type="button" data-attendance-status="present" ${selectedStaff && !employeeSignatureLocked ? "" : "disabled"}>출근</button>
-                <button class="button button--danger" type="button" data-attendance-status="absent" ${selectedStaff && !employeeSignatureLocked ? "" : "disabled"}>결근</button>
+                <button class="button ${presentSelected ? "button--primary is-selected" : "button--ghost"}" type="button" data-attendance-status="present" aria-pressed="${presentSelected ? "true" : "false"}" ${selectedStaff && !employeeSignatureLocked ? "" : "disabled"}>출근</button>
+                <button class="button ${absentSelected ? "button--danger is-selected" : "button--ghost"}" type="button" data-attendance-status="absent" aria-pressed="${absentSelected ? "true" : "false"}" ${selectedStaff && !employeeSignatureLocked ? "" : "disabled"}>결근</button>
+                <button class="button button--primary" type="button" id="confirmEmployeeAttendance" ${pendingAttendanceStatus && selectedStaff && !employeeSignatureLocked ? "" : "disabled"}>확인</button>
+                <span class="signature-help" id="employeeAttendanceHelp">${
+                  employeeSignatureLocked
+                    ? "근무자 기록이 저장되어 수정할 수 없습니다."
+                    : pendingAttendanceStatus
+                      ? `${attendanceStatusLabel(pendingAttendanceStatus)} 선택됨. 확인을 누르면 최종 확인창이 열립니다.`
+                      : "출근 또는 결근을 선택한 뒤 확인하세요."
+                }</span>
               </div>
             </div>
             <div class="signature-card">
@@ -2138,8 +2165,9 @@ function renderAttendanceScreen() {
     });
   });
   els.workArea.querySelectorAll("[data-attendance-status]").forEach((button) => {
-    button.addEventListener("click", () => saveAttendanceRecord(button.dataset.attendanceStatus, els.workArea));
+    button.addEventListener("click", () => selectPendingAttendanceStatus(button.dataset.attendanceStatus, els.workArea));
   });
+  els.workArea.querySelector("#confirmEmployeeAttendance")?.addEventListener("click", () => openAttendanceConfirmModal(els.workArea));
   els.workArea.querySelector("#confirmManagerAttendance")?.addEventListener("click", () => confirmManagerAttendance(els.workArea));
   els.workArea.querySelector("#deleteAttendanceRecord")?.addEventListener("click", deleteAttendanceRecord);
   els.workArea.querySelectorAll("[data-attendance-date]").forEach((button) => {
@@ -2159,16 +2187,41 @@ function renderAttendanceScreen() {
   });
 }
 
-function saveAttendanceRecord(status, container) {
+function selectPendingAttendanceStatus(status, container) {
   const staff = getStaffMember(state.selectedAttendanceStaffId);
   if (!staff) {
     alert("근무자 이름을 먼저 선택해주세요.");
     return;
   }
+  if (getAttendanceRecord(getSelectedAttendanceDate(), staff.id)) return;
+
+  const nextStatus = status === "absent" ? "absent" : "present";
+  state.pendingAttendanceStatus = nextStatus;
+  state.pendingAttendanceKey = getAttendanceDraftKey(getSelectedAttendanceDate(), staff.id);
+  container.querySelectorAll("[data-attendance-status]").forEach((button) => {
+    const isSelected = button.dataset.attendanceStatus === nextStatus;
+    button.classList.toggle("is-selected", isSelected);
+    button.classList.toggle("button--ghost", !isSelected);
+    button.classList.toggle("button--primary", isSelected && button.dataset.attendanceStatus === "present");
+    button.classList.toggle("button--danger", isSelected && button.dataset.attendanceStatus === "absent");
+    button.setAttribute("aria-pressed", isSelected ? "true" : "false");
+  });
+  const confirmButton = container.querySelector("#confirmEmployeeAttendance");
+  if (confirmButton) confirmButton.disabled = false;
+  const help = container.querySelector("#employeeAttendanceHelp");
+  if (help) help.textContent = `${attendanceStatusLabel(nextStatus)} 선택됨. 확인을 누르면 최종 확인창이 열립니다.`;
+}
+
+function buildAttendanceDraft(status, container) {
+  const staff = getStaffMember(state.selectedAttendanceStaffId);
+  if (!staff) {
+    alert("근무자 이름을 먼저 선택해주세요.");
+    return null;
+  }
   const employeeSignature = getSignaturePadData(container.querySelector("#employeeSignaturePad"));
   if (!employeeSignature) {
     alert("근무자 서명을 손가락으로 입력해주세요.");
-    return;
+    return null;
   }
 
   const scheduledStart = normalizeTimeValue(container.querySelector("#attendanceScheduledStart")?.value);
@@ -2177,18 +2230,98 @@ function saveAttendanceRecord(status, container) {
   const actualEnd = normalizeTimeValue(container.querySelector("#attendanceActualEnd")?.value);
   if (status === "present" && (!actualStart || !actualEnd)) {
     alert("실제 출근/퇴근 시간을 입력해주세요.");
+    return null;
+  }
+
+  return {
+    date: getSelectedAttendanceDate(),
+    staffId: staff.id,
+    staffName: staff.name,
+    status: status === "absent" ? "absent" : "present",
+    employeeSignature,
+    scheduledStart,
+    scheduledEnd,
+    actualStart: status === "present" ? actualStart : "",
+    actualEnd: status === "present" ? actualEnd : "",
+    adjustmentReason: container.querySelector("#attendanceAdjustmentReason")?.value.trim() || "",
+  };
+}
+
+function attendanceConfirmSummaryRows(draft) {
+  const scheduledText = formatTimeRange(draft.scheduledStart, draft.scheduledEnd) || "예정 시간 없음";
+  const actualText = draft.status === "present" ? formatTimeRange(draft.actualStart, draft.actualEnd) || "실제 시간 없음" : "결근";
+  const timingText = draft.status === "present" ? attendanceTimingSummary(draft) : "";
+  return [
+    ["근무자", draft.staffName],
+    ["날짜", formatAttendanceDate(draft.date)],
+    ["구분", attendanceStatusLabel(draft.status)],
+    ["예정 근무시간", scheduledText],
+    ["실제 근무시간", actualText],
+    ...(timingText ? [["근무시간 요약", timingText]] : []),
+    ...(draft.adjustmentReason ? [["변경 사유", draft.adjustmentReason]] : []),
+  ];
+}
+
+function openAttendanceConfirmModal(container) {
+  const status = state.pendingAttendanceStatus;
+  if (!status) {
+    alert("출근 또는 결근을 먼저 선택해주세요.");
+    return;
+  }
+  const draft = buildAttendanceDraft(status, container);
+  if (!draft) return;
+  state.pendingAttendanceDraft = draft;
+
+  if (!els.attendanceConfirmModal || !els.attendanceConfirmSummary) {
+    if (confirm(getAttendanceConfirmText(draft))) finalizeAttendanceRecord();
     return;
   }
 
-  const selectedDate = getSelectedAttendanceDate();
+  els.attendanceConfirmSummary.innerHTML = attendanceConfirmSummaryRows(draft)
+    .map(
+      ([label, value]) => `
+        <div class="attendance-confirm-row">
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(value)}</strong>
+        </div>
+      `,
+    )
+    .join("");
+  els.attendanceConfirmModal.hidden = false;
+  els.attendanceConfirmFinal?.focus();
+}
+
+function getAttendanceConfirmText(draft) {
+  const rows = attendanceConfirmSummaryRows(draft).map(([label, value]) => `${label}: ${value}`);
+  return `${rows.join("\n")}\n\n최종확인을 누르면 근무자 서명과 출근/결근 기록은 수정할 수 없습니다.`;
+}
+
+function closeAttendanceConfirmModal() {
+  state.pendingAttendanceDraft = null;
+  if (els.attendanceConfirmModal) els.attendanceConfirmModal.hidden = true;
+}
+
+function finalizeAttendanceRecord() {
+  const draft = state.pendingAttendanceDraft;
+  if (!draft) return;
+  saveAttendanceRecord(draft);
+  state.pendingAttendanceStatus = null;
+  state.pendingAttendanceKey = "";
+  state.pendingAttendanceDraft = null;
+  if (els.attendanceConfirmModal) els.attendanceConfirmModal.hidden = true;
+}
+
+function saveAttendanceRecord(draft) {
+  if (!draft) return;
+
   const updatedAt = nowIso();
-  let record = getAttendanceRecord(selectedDate, staff.id);
+  let record = getAttendanceRecord(draft.date, draft.staffId);
   if (!record) {
     record = {
       id: uid("attendance"),
-      date: selectedDate,
-      staffId: staff.id,
-      staffName: staff.name,
+      date: draft.date,
+      staffId: draft.staffId,
+      staffName: draft.staffName,
       status: "present",
       employeeSignature: "",
       managerSignature: "",
@@ -2202,15 +2335,15 @@ function saveAttendanceRecord(status, container) {
     };
     db.operations.attendanceRecords.push(record);
   }
-  record.staffName = staff.name;
-  record.status = status === "absent" ? "absent" : "present";
-  record.employeeSignature = employeeSignature;
+  record.staffName = draft.staffName;
+  record.status = draft.status;
+  record.employeeSignature = draft.employeeSignature;
   if (record.status === "absent") record.managerSignature = "";
-  record.scheduledStart = scheduledStart;
-  record.scheduledEnd = scheduledEnd;
-  record.actualStart = record.status === "present" ? actualStart : "";
-  record.actualEnd = record.status === "present" ? actualEnd : "";
-  record.adjustmentReason = container.querySelector("#attendanceAdjustmentReason")?.value.trim() || "";
+  record.scheduledStart = draft.scheduledStart;
+  record.scheduledEnd = draft.scheduledEnd;
+  record.actualStart = draft.actualStart;
+  record.actualEnd = draft.actualEnd;
+  record.adjustmentReason = draft.adjustmentReason;
   record.recordedAt = record.recordedAt || updatedAt;
   record.updatedAt = updatedAt;
   saveDb();
@@ -5254,10 +5387,13 @@ els.cancelConfirm.addEventListener("click", () => {
 });
 els.alarmAck.addEventListener("click", acknowledgeAlarm);
 els.alarmSnooze.addEventListener("click", snoozeAlarm);
+els.attendanceConfirmClose?.addEventListener("click", closeAttendanceConfirmModal);
+els.attendanceConfirmFinal?.addEventListener("click", finalizeAttendanceRecord);
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeCancelModal();
+    closeAttendanceConfirmModal();
   }
 });
 document.addEventListener("visibilitychange", () => {

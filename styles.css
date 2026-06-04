@@ -1643,6 +1643,15 @@ th {
   flex-wrap: wrap;
 }
 
+.signature-actions .button.is-selected {
+  box-shadow: 0 0 0 3px rgba(45, 121, 108, 0.22);
+  transform: translateY(-1px);
+}
+
+.signature-actions .button--danger.is-selected {
+  box-shadow: 0 0 0 3px rgba(210, 54, 44, 0.2);
+}
+
 .signature-help {
   color: var(--muted);
   font-size: 14px;
@@ -2100,6 +2109,40 @@ th {
 
 .modal--alarm .modal-actions {
   justify-content: center;
+}
+
+.attendance-confirm-summary {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.attendance-confirm-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f2f6f7;
+}
+
+.attendance-confirm-row span {
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.attendance-confirm-row strong {
+  text-align: right;
+}
+
+.attendance-confirm-warning {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff4dc;
+  color: #8a5b10;
+  font-weight: 900;
 }
 
 .sound-help {
