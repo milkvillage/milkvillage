@@ -652,11 +652,12 @@ function normalizeRecipe(recipe, index = 0) {
 
 function normalizeRecipeVariant(variant, index = 0) {
   const multiplier = Number(variant?.multiplier || 1);
+  const normalizedMultiplier = Number.isFinite(multiplier) ? multiplier : 1;
   const sortOrder = Number(variant?.sortOrder);
   return {
     ...variant,
-    multiplier: Number.isFinite(multiplier) ? multiplier : 1,
-    label: getVariantLabelFromMultiplier(Number.isFinite(multiplier) ? multiplier : 1),
+    multiplier: normalizedMultiplier,
+    label: variant?.label || getVariantLabelFromMultiplier(normalizedMultiplier),
     sortOrder: Number.isFinite(sortOrder) ? sortOrder : index + 1,
     updatedAt: variant?.updatedAt || variant?.createdAt || nowIso(),
   };
@@ -1474,6 +1475,23 @@ function getMeasuredPrepConfig(recipe) {
   };
 }
 
+function getVariantDisplayLabel(variant, recipe = null) {
+  const sourceRecipe = recipe || getRecipe(variant?.recipeId);
+  if (isMeasuredPrepRecipe(sourceRecipe)) {
+    return variant?.label || getMeasuredPrepConfig(sourceRecipe).inputLabel || "실측 입력";
+  }
+  return getVariantLabelFromMultiplier(variant?.multiplier || 1);
+}
+
+function isGeneratedVariantLabel(label) {
+  return /^x\d/i.test(String(label || "").trim());
+}
+
+function getDefaultVariantLabelForRecipe(recipe, index = 1) {
+  if (isMeasuredPrepRecipe(recipe)) return getMeasuredPrepConfig(recipe).inputLabel || "실측 입력";
+  return getVariantLabelFromMultiplier(index);
+}
+
 function getSuppliesForAdmin() {
   return [...db.supplies].sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
 }
@@ -1484,7 +1502,7 @@ function normalizeRecipeNameForMatch(name) {
 
 function ensureMeasuredWhippingPreset() {
   db.meta = db.meta || {};
-  if (db.meta.measuredWhippingPresetVersion >= 1) return false;
+  if (db.meta.measuredWhippingPresetVersion >= 2) return false;
 
   const creamSupply = getSuppliesForAdmin().find((supply) => String(supply.name || "").includes("생크림"));
   if (!creamSupply) return false;
@@ -1512,20 +1530,26 @@ function ensureMeasuredWhippingPreset() {
   recipe.measuredRatio = 0.25;
   recipe.updatedAt = createdAt;
 
-  if (!getVariantsForRecipe(recipe.id, false).length) {
-    db.recipeVariants.push({
+  const variants = getVariantsForRecipe(recipe.id, false);
+  if (!variants.length) {
+    const variant = {
       id: db.recipeVariants.some((item) => item.id === "variant_milk_cream_whip_1") ? uid("variant") : "variant_milk_cream_whip_1",
       recipeId: recipe.id,
-      label: "x1",
+      label: "우유크림 베이스",
       multiplier: 1,
       sortOrder: 1,
       isActive: true,
       createdAt,
       updatedAt: createdAt,
-    });
+    };
+    db.recipeVariants.push(variant);
+  } else if (db.meta.measuredWhippingPresetVersion < 2) {
+    variants[0].label = variants[0].label && !isGeneratedVariantLabel(variants[0].label) ? variants[0].label : "우유크림 베이스";
+    variants[0].multiplier = 1;
+    variants[0].updatedAt = createdAt;
   }
 
-  db.meta.measuredWhippingPresetVersion = 1;
+  db.meta.measuredWhippingPresetVersion = 2;
   return true;
 }
 
@@ -1780,7 +1804,7 @@ function renderMakeScreen() {
                   <button class="batch-button ${state.loadingVariantId === variant.id ? "is-loading" : ""}" type="button" data-create-variant="${variant.id}" ${
                     state.loadingVariantId ? "disabled" : ""
                   }>
-                    ${state.loadingVariantId === variant.id ? "처리 중" : `${escapeHtml(variant.label)} ${usesMeasuredPrep ? "실측 입력" : "만들기"}`}
+                    ${state.loadingVariantId === variant.id ? "처리 중" : `${escapeHtml(getVariantDisplayLabel(variant, recipe))} ${usesMeasuredPrep ? "실측 입력" : "만들기"}`}
                   </button>
                 `,
               )
@@ -3694,21 +3718,21 @@ function renderRecipeAdmin(container) {
         </div>
       </section>
       <section class="admin-column">
-        <h3>배수</h3>
+        <h3>${isMeasuredPrepRecipe(recipe) ? "입력 항목" : "배수"}</h3>
         <div class="list-stack">
           ${variants
             .map(
               (item) => `
                 <button class="list-button ${item.id === variant?.id ? "is-active" : ""}" type="button" data-select-variant="${item.id}">
-                  ${escapeHtml(getVariantLabelFromMultiplier(item.multiplier))}${item.isActive ? "" : " (비활성)"}
+                  ${escapeHtml(getVariantDisplayLabel(item, recipe))}${item.isActive ? "" : " (비활성)"}
                 </button>
               `,
             )
             .join("")}
         </div>
         <div class="column-footer">
-          <button class="button button--ghost button--small" type="button" id="addVariant">배수 추가</button>
-          <button class="button button--ghost button--small" type="button" id="cloneVariant" ${variant ? "" : "disabled"}>복제</button>
+          <button class="button button--ghost button--small" type="button" id="addVariant">${isMeasuredPrepRecipe(recipe) ? "항목 추가" : "배수 추가"}</button>
+          <button class="button button--ghost button--small" type="button" id="cloneVariant" ${variant && !isMeasuredPrepRecipe(recipe) ? "" : "disabled"}>복제</button>
           <button class="button button--danger button--small" type="button" id="deleteVariant" ${variant ? "" : "disabled"}>삭제</button>
         </div>
       </section>
@@ -3770,16 +3794,22 @@ function renderRecipeAdmin(container) {
           ${
             variant
               ? `
-                <h4 class="subheading">배수 설정</h4>
+                <h4 class="subheading">${isMeasuredPrepRecipe(recipe) ? "실측 입력 설정" : "배수 설정"}</h4>
                 <div class="dense-grid">
                   <label class="field">
-                    <span>배수명</span>
-                    <input id="variantLabel" type="text" value="${escapeAttr(getVariantLabelFromMultiplier(variant.multiplier))}" readonly />
+                    <span>${isMeasuredPrepRecipe(recipe) ? "버튼명" : "배수명"}</span>
+                    <input id="variantLabel" type="text" value="${escapeAttr(getVariantDisplayLabel(variant, recipe))}" ${isMeasuredPrepRecipe(recipe) ? "" : "readonly"} />
                   </label>
-                  <label class="field">
-                    <span>배수값</span>
-                    <input id="variantMultiplier" type="number" step="0.1" value="${variant.multiplier}" />
-                  </label>
+                  ${
+                    isMeasuredPrepRecipe(recipe)
+                      ? ""
+                      : `
+                        <label class="field">
+                          <span>배수값</span>
+                          <input id="variantMultiplier" type="number" step="0.1" value="${variant.multiplier}" />
+                        </label>
+                      `
+                  }
                   <label class="field">
                     <span>정렬</span>
                     <input id="variantSort" type="number" value="${variant.sortOrder}" />
@@ -4031,12 +4061,13 @@ function addVariant(container) {
   if (!state.selectedRecipeId) return;
   applyRecipeAdminFormValues(container);
   const createdAt = nowIso();
+  const recipe = getRecipe(state.selectedRecipeId);
   const variants = getVariantsForRecipe(state.selectedRecipeId, false);
   const variant = {
     id: uid("variant"),
     recipeId: state.selectedRecipeId,
-    label: getVariantLabelFromMultiplier(variants.length + 1),
-    multiplier: variants.length + 1,
+    label: getDefaultVariantLabelForRecipe(recipe, variants.length + 1),
+    multiplier: isMeasuredPrepRecipe(recipe) ? 1 : variants.length + 1,
     sortOrder: variants.length + 1,
     isActive: true,
     createdAt,
@@ -4044,7 +4075,7 @@ function addVariant(container) {
   };
   db.recipeVariants.push(variant);
   state.selectedVariantId = variant.id;
-  state.savedMessage = "배수가 추가되었습니다.";
+  state.savedMessage = isMeasuredPrepRecipe(recipe) ? "입력 항목이 추가되었습니다." : "배수가 추가되었습니다.";
   saveDb();
   renderAdminScreen();
 }
@@ -4053,6 +4084,8 @@ function cloneVariant(container) {
   applyRecipeAdminFormValues(container);
   const source = getVariant(state.selectedVariantId);
   if (!source) return;
+  const recipe = getRecipe(source.recipeId);
+  if (isMeasuredPrepRecipe(recipe)) return;
   const createdAt = nowIso();
   const variants = getVariantsForRecipe(source.recipeId, false);
   const variant = {
@@ -4133,9 +4166,16 @@ function applyRecipeAdminFormValues(container) {
     recipe.updatedAt = now;
   }
   if (variant) {
-    const multiplier = Number(container.querySelector("#variantMultiplier")?.value || variant.multiplier);
-    variant.multiplier = Number.isFinite(multiplier) ? multiplier : variant.multiplier;
-    variant.label = getVariantLabelFromMultiplier(variant.multiplier);
+    if (isMeasuredPrepRecipe(recipe)) {
+      const labelInputValue = container.querySelector("#variantLabel")?.value.trim() || "";
+      variant.multiplier = 1;
+      variant.label =
+        labelInputValue && !isGeneratedVariantLabel(labelInputValue) ? labelInputValue : recipe.measuredInputLabel || variant.label || "실측 입력";
+    } else {
+      const multiplier = Number(container.querySelector("#variantMultiplier")?.value || variant.multiplier);
+      variant.multiplier = Number.isFinite(multiplier) ? multiplier : variant.multiplier;
+      variant.label = getVariantLabelFromMultiplier(variant.multiplier);
+    }
     variant.sortOrder = Number(container.querySelector("#variantSort")?.value || variant.sortOrder);
     variant.isActive = Boolean(container.querySelector("#variantActive")?.checked);
     variant.updatedAt = now;
@@ -4667,7 +4707,14 @@ function renderAlarmsAdmin(container) {
   container.querySelector("#saveAlarm")?.addEventListener("click", () => {
     if (!alarm) return;
     if (!validateAlarmForm(container)) return;
-    applySimpleAlarmForm(container, alarm, { activate: true });
+    const nextAlarm = { ...alarm };
+    applySimpleAlarmForm(container, nextAlarm, { activate: true });
+    const conflicts = findAlarmScheduleConflicts(nextAlarm, alarm.id);
+    if (conflicts.length) {
+      alert(formatAlarmConflictMessage(conflicts));
+      return;
+    }
+    Object.assign(alarm, nextAlarm);
     state.savedMessage = "저장 완료";
     saveDb();
     restartActiveAlarmIfMatching(alarm);
@@ -4699,6 +4746,63 @@ function validateAlarmForm(container) {
     return false;
   }
   return true;
+}
+
+function getAlarmOccurrenceMinutes(alarm) {
+  const baseMinute = timeToMinutes(alarm?.time || "00:00");
+  const openMinute = timeToMinutes(alarm?.openTime || "00:00") ?? 0;
+  const closeMinute = timeToMinutes(alarm?.closeTime || "24:00") ?? 24 * 60;
+  const intervalMinutes = normalizeAlarmIntervalMinutes(alarm?.intervalMinutes);
+  if (baseMinute === null || closeMinute <= openMinute) return [];
+
+  if (!intervalMinutes) {
+    return baseMinute >= openMinute && baseMinute < closeMinute ? [baseMinute] : [];
+  }
+
+  let currentMinute = baseMinute;
+  if (currentMinute < openMinute) {
+    currentMinute += Math.ceil((openMinute - currentMinute) / intervalMinutes) * intervalMinutes;
+  }
+
+  const minutes = [];
+  while (currentMinute < closeMinute && currentMinute < 24 * 60) {
+    minutes.push(currentMinute);
+    currentMinute += intervalMinutes;
+  }
+  return minutes;
+}
+
+function findAlarmScheduleConflicts(candidateAlarm, excludeAlarmId = "") {
+  const candidateDays = normalizeAlarmDays(candidateAlarm?.repeatDays);
+  const candidateMinutes = getAlarmOccurrenceMinutes(candidateAlarm);
+  if (!candidateDays.length || !candidateMinutes.length) return [];
+
+  return db.alarms
+    .filter((alarm) => alarm.id !== excludeAlarmId && isScheduledAlarmEnabled(alarm))
+    .map((alarm) => {
+      const overlapDays = normalizeAlarmDays(alarm.repeatDays).filter((day) => candidateDays.includes(day));
+      if (!overlapDays.length) return null;
+      const existingMinutes = new Set(getAlarmOccurrenceMinutes(alarm));
+      const overlapMinutes = candidateMinutes.filter((minute) => existingMinutes.has(minute));
+      if (!overlapMinutes.length) return null;
+      return { alarm, days: overlapDays, minutes: overlapMinutes };
+    })
+    .filter(Boolean);
+}
+
+function formatMinutesAsTime(minutes) {
+  const hour = Math.floor(minutes / 60);
+  const minute = minutes % 60;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function formatAlarmConflictMessage(conflicts) {
+  const firstConflict = conflicts[0];
+  const alarmTitle = getAlarmListTitle(firstConflict.alarm);
+  const dayText = firstConflict.days.map((day) => alarmDayLabels[day]).join("");
+  const timeText = firstConflict.minutes.slice(0, 4).map(formatMinutesAsTime).join(", ");
+  const moreText = firstConflict.minutes.length > 4 ? ` 외 ${firstConflict.minutes.length - 4}개` : "";
+  return `알림 시간이 겹칩니다.\n\n${dayText} ${timeText}${moreText}에 "${alarmTitle}" 알림이 이미 있습니다.\n\n다른 시간이나 반복 간격으로 저장해주세요.`;
 }
 
 function applySimpleAlarmForm(container, alarm, { activate = false } = {}) {
@@ -5003,11 +5107,8 @@ function triggerAlarm(alarm, source = "schedule", scheduledAt = "") {
   const existingEvent = findAlarmEventForMinute(alarm.id, new Date(triggeredAt));
   if (existingEvent?.status === "triggered") {
     updateAlarmEventFromAlarm(existingEvent, alarm, { source, triggeredAt });
-    state.activeAlarmEventId = existingEvent.id;
     saveDb();
-    const displayAlarm = getAlarmDisplayFromEvent(existingEvent);
-    showAlarmModal(displayAlarm, { playSound: false });
-    startAlarmSound(displayAlarm, { forceRestart: true, immediate: true });
+    showNextOpenAlarm("local");
     return;
   }
 
@@ -5020,9 +5121,8 @@ function triggerAlarm(alarm, source = "schedule", scheduledAt = "") {
     { source, triggeredAt },
   );
   db.alarmEventLogs.push(eventLog);
-  state.activeAlarmEventId = eventLog.id;
   saveDb();
-  showAlarmModal(getAlarmDisplayFromEvent(eventLog));
+  showNextOpenAlarm("local");
 }
 
 function updateAlarmEventFromAlarm(eventLog, alarm, { source = "schedule", triggeredAt = nowIso() } = {}) {
@@ -5064,9 +5164,13 @@ function closeAlarmModal() {
 
 function getOpenAlarmEvent() {
   const today = todayDateKey();
+  const activeEvent = db.alarmEventLogs.find(
+    (log) => log.id === state.activeAlarmEventId && log.status === "triggered" && dateKeyFromIso(log.triggeredAt) === today,
+  );
+  if (activeEvent) return activeEvent;
   return db.alarmEventLogs
     .filter((log) => log.status === "triggered" && dateKeyFromIso(log.triggeredAt) === today)
-    .sort((a, b) => new Date(b.triggeredAt) - new Date(a.triggeredAt))[0];
+    .sort((a, b) => new Date(a.triggeredAt) - new Date(b.triggeredAt))[0];
 }
 
 function findAlarmEventForMinute(alarmId, date) {
@@ -5182,7 +5286,7 @@ function restartActiveAlarmIfMatching(alarm) {
   startAlarmSound(displayAlarm, { forceRestart: true, immediate: true });
 }
 
-function syncAlarmModalFromRemote(source = "realtime") {
+function showNextOpenAlarm(source = "local") {
   const openEvent = getOpenAlarmEvent();
   if (!openEvent) {
     if (state.activeAlarmEventId) {
@@ -5196,7 +5300,11 @@ function syncAlarmModalFromRemote(source = "realtime") {
   state.activeAlarmEventId = openEvent.id;
   const alarm = getAlarmDisplayFromEvent(openEvent);
   showAlarmModal(alarm, { playSound: false });
-  startAlarmSound(alarm, { forceRestart: isNewEvent && source !== "local", immediate: isNewEvent });
+  startAlarmSound(alarm, { forceRestart: isNewEvent, immediate: isNewEvent });
+}
+
+function syncAlarmModalFromRemote(source = "realtime") {
+  showNextOpenAlarm(source);
 }
 
 function acknowledgeAlarm() {
@@ -5210,6 +5318,8 @@ function acknowledgeAlarm() {
     saveDb();
   }
   closeAlarmModal();
+  state.activeAlarmEventId = null;
+  showNextOpenAlarm("local");
   if (state.screen === "admin" && state.adminMenu === "alarmLogs") renderAdminScreen();
 }
 
@@ -5225,6 +5335,8 @@ function snoozeAlarm() {
     saveDb();
   }
   closeAlarmModal();
+  state.activeAlarmEventId = null;
+  showNextOpenAlarm("local");
   if (state.screen === "admin" && state.adminMenu === "alarmLogs") renderAdminScreen();
 }
 
