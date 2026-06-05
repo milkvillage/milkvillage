@@ -2120,6 +2120,16 @@ th {
   justify-content: center;
 }
 
+.measured-prep-preview {
+  margin: 12px 0 4px;
+  padding: 14px;
+  border-radius: 8px;
+  background: var(--teal-soft);
+  color: var(--teal-dark);
+  font-size: 20px;
+  font-weight: 950;
+}
+
 .attendance-confirm-summary {
   display: grid;
   gap: 8px;

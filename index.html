@@ -102,6 +102,22 @@
       </section>
     </div>
 
+    <div class="modal-backdrop" id="measuredPrepModal" hidden>
+      <section class="modal modal--measured-prep" role="dialog" aria-modal="true" aria-labelledby="measuredPrepTitle">
+        <h2 id="measuredPrepTitle">실측값 입력</h2>
+        <p id="measuredPrepMessage">저울로 잰 무게를 입력하면 차감량이 자동 계산됩니다.</p>
+        <label class="field">
+          <span id="measuredPrepInputLabel">실측 무게(g)</span>
+          <input id="measuredPrepInput" type="number" min="0" step="1" inputmode="decimal" placeholder="예: 1200" />
+        </label>
+        <div class="measured-prep-preview" id="measuredPrepPreview">차감량 0g</div>
+        <div class="modal-actions">
+          <button class="button button--ghost" id="measuredPrepClose" type="button">닫기</button>
+          <button class="button button--primary" id="measuredPrepConfirm" type="button">제조 확정</button>
+        </div>
+      </section>
+    </div>
+
     <div class="modal-backdrop" id="alarmModal" hidden>
       <section class="modal modal--alarm" role="dialog" aria-modal="true" aria-labelledby="alarmTitle">
         <div class="modal-icon" aria-hidden="true">

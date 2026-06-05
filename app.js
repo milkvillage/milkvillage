@@ -180,6 +180,7 @@ const state = {
   operatorName: "",
   loadingVariantId: null,
   pendingCancelBatchId: null,
+  pendingMeasuredVariantId: null,
   pendingAttendanceStatus: null,
   pendingAttendanceKey: "",
   pendingAttendanceDraft: null,
@@ -201,6 +202,14 @@ const els = {
   cancelReason: document.querySelector("#cancelReason"),
   cancelClose: document.querySelector("#cancelClose"),
   cancelConfirm: document.querySelector("#cancelConfirm"),
+  measuredPrepModal: document.querySelector("#measuredPrepModal"),
+  measuredPrepTitle: document.querySelector("#measuredPrepTitle"),
+  measuredPrepMessage: document.querySelector("#measuredPrepMessage"),
+  measuredPrepInputLabel: document.querySelector("#measuredPrepInputLabel"),
+  measuredPrepInput: document.querySelector("#measuredPrepInput"),
+  measuredPrepPreview: document.querySelector("#measuredPrepPreview"),
+  measuredPrepClose: document.querySelector("#measuredPrepClose"),
+  measuredPrepConfirm: document.querySelector("#measuredPrepConfirm"),
   alarmModal: document.querySelector("#alarmModal"),
   alarmTitle: document.querySelector("#alarmTitle"),
   alarmMessage: document.querySelector("#alarmMessage"),
@@ -218,7 +227,8 @@ const els = {
 
 let db = loadDb();
 localRevisionAt = db.meta?.updatedAt || "";
-if (pruneExpiredLogs()) {
+const initializedMeasuredWhippingPreset = ensureMeasuredWhippingPreset();
+if (pruneExpiredLogs() || initializedMeasuredWhippingPreset) {
   markDbChanged();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
 }
@@ -620,10 +630,21 @@ function normalizeSupply(supply, index = 0) {
   };
 }
 
+function normalizeMeasuredRatio(value) {
+  const ratio = Number(value);
+  return Number.isFinite(ratio) && ratio > 0 ? ratio : 0.25;
+}
+
 function normalizeRecipe(recipe, index = 0) {
   const sortOrder = Number(recipe?.sortOrder);
+  const prepMode = recipe?.prepMode === "measured_ratio" ? "measured_ratio" : "fixed";
   return {
     ...recipe,
+    prepMode,
+    measuredInputLabel: recipe?.measuredInputLabel || "실측 무게",
+    measuredInputUnit: recipe?.measuredInputUnit || "g",
+    measuredSupplyId: recipe?.measuredSupplyId || "",
+    measuredRatio: normalizeMeasuredRatio(recipe?.measuredRatio),
     sortOrder: Number.isFinite(sortOrder) ? sortOrder : index + 1,
     updatedAt: recipe?.updatedAt || recipe?.createdAt || nowIso(),
   };
@@ -841,7 +862,8 @@ function applyRemoteState(row, { force = false, source = "realtime" } = {}) {
   applyingRemoteState = true;
   db = normalizeDb(row.data);
   const prunedExpiredLogs = pruneExpiredLogs();
-  if (prunedExpiredLogs) markDbChanged();
+  const initializedMeasuredPreset = ensureMeasuredWhippingPreset();
+  if (prunedExpiredLogs || initializedMeasuredPreset) markDbChanged();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
   lastRemoteUpdatedAt = nextUpdatedAt || nowIso();
   localRevisionAt = db.meta?.updatedAt || lastRemoteUpdatedAt;
@@ -850,7 +872,7 @@ function applyRemoteState(row, { force = false, source = "realtime" } = {}) {
   setRemoteStatus(source === "realtime" ? "실시간 동기화됨" : "DB 동기화됨", "online");
   render();
   syncAlarmModalFromRemote(source);
-  if (prunedExpiredLogs) queueRemoteSave();
+  if (prunedExpiredLogs || initializedMeasuredPreset) queueRemoteSave();
 }
 
 function syncSelectedIds() {
@@ -1433,8 +1455,78 @@ function getSupply(supplyId) {
   return db.supplies.find((supply) => supply.id === supplyId);
 }
 
+function getDefaultMeasuredSupply() {
+  const supplies = getSuppliesForAdmin();
+  return supplies.find((supply) => String(supply.name || "").includes("생크림")) || supplies[0] || null;
+}
+
+function isMeasuredPrepRecipe(recipe) {
+  return recipe?.prepMode === "measured_ratio";
+}
+
+function getMeasuredPrepConfig(recipe) {
+  const supply = getSupply(recipe?.measuredSupplyId) || getDefaultMeasuredSupply();
+  return {
+    inputLabel: recipe?.measuredInputLabel || "실측 무게",
+    inputUnit: recipe?.measuredInputUnit || "g",
+    ratio: normalizeMeasuredRatio(recipe?.measuredRatio),
+    supply,
+  };
+}
+
 function getSuppliesForAdmin() {
   return [...db.supplies].sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
+}
+
+function normalizeRecipeNameForMatch(name) {
+  return String(name || "").replace(/\s+/g, "");
+}
+
+function ensureMeasuredWhippingPreset() {
+  db.meta = db.meta || {};
+  if (db.meta.measuredWhippingPresetVersion >= 1) return false;
+
+  const creamSupply = getSuppliesForAdmin().find((supply) => String(supply.name || "").includes("생크림"));
+  if (!creamSupply) return false;
+
+  const createdAt = nowIso();
+  const recipeNameKey = normalizeRecipeNameForMatch("우유크림 휘핑");
+  let recipe = db.recipes.find((item) => normalizeRecipeNameForMatch(item.name) === recipeNameKey);
+  if (!recipe) {
+    recipe = {
+      id: db.recipes.some((item) => item.id === "recipe_milk_cream_whip") ? uid("recipe") : "recipe_milk_cream_whip",
+      name: "우유크림 휘핑",
+      category: "재료준비",
+      isActive: true,
+      sortOrder: getRecipesForAdmin().length + 1,
+      createdAt,
+      updatedAt: createdAt,
+    };
+    db.recipes.push(recipe);
+  }
+
+  recipe.prepMode = "measured_ratio";
+  recipe.measuredInputLabel = "우유크림 베이스";
+  recipe.measuredInputUnit = "g";
+  recipe.measuredSupplyId = creamSupply.id;
+  recipe.measuredRatio = 0.25;
+  recipe.updatedAt = createdAt;
+
+  if (!getVariantsForRecipe(recipe.id, false).length) {
+    db.recipeVariants.push({
+      id: db.recipeVariants.some((item) => item.id === "variant_milk_cream_whip_1") ? uid("variant") : "variant_milk_cream_whip_1",
+      recipeId: recipe.id,
+      label: "x1",
+      multiplier: 1,
+      sortOrder: 1,
+      isActive: true,
+      createdAt,
+      updatedAt: createdAt,
+    });
+  }
+
+  db.meta.measuredWhippingPresetVersion = 1;
+  return true;
 }
 
 function getStaffMembersForAdmin() {
@@ -1603,6 +1695,15 @@ function setScreen(screen) {
   render();
 }
 
+function getMeasuredPrepBatchText(batch) {
+  if (!batch?.measuredInputQty || !batch?.measuredCalculatedQty) return "";
+  const inputLabel = batch.measuredInputLabel || "실측 무게";
+  const inputUnit = batch.measuredInputUnit || "g";
+  const supplyName = batch.measuredSupplyName || "차감 소모품";
+  const supplyUnit = batch.measuredSupplyUnit || inputUnit;
+  return `${inputLabel} ${numberText(batch.measuredInputQty)}${inputUnit} → ${supplyName} ${numberText(batch.measuredCalculatedQty)}${supplyUnit} 차감`;
+}
+
 function renderSoundStatus() {
   els.soundUnlockButton.className = `pill-button ${state.audioUnlocked ? "pill-button--ready" : "pill-button--pending"}`;
   els.soundUnlockButton.setAttribute("aria-label", `음성 상태: ${state.audioUnlocked ? "ON" : "OFF"}`);
@@ -1639,6 +1740,7 @@ function renderMakeScreen() {
     state.selectedRecipeId = activeRecipes[0]?.id || null;
   }
   const recipe = getRecipe(state.selectedRecipeId);
+  const usesMeasuredPrep = isMeasuredPrepRecipe(recipe);
   const variants = getVariantsForRecipe(recipe?.id);
   if (!state.selectedVariantId || !variants.some((variant) => variant.id === state.selectedVariantId)) {
     state.selectedVariantId = variants[0]?.id || null;
@@ -1651,7 +1753,7 @@ function renderMakeScreen() {
       <section class="panel" aria-label="재료 제조">
         <div class="panel-header">
           <h2>선택한 재료</h2>
-          <p>재료를 고르고 배수 버튼만 누르면 재고가 자동 차감됩니다.</p>
+          <p>${usesMeasuredPrep ? "재료를 고르고 저울로 잰 실측값을 입력하면 재고가 자동 차감됩니다." : "재료를 고르고 배수 버튼만 누르면 재고가 자동 차감됩니다."}</p>
         </div>
         ${
           lowSupplies.length
@@ -1678,7 +1780,7 @@ function renderMakeScreen() {
                   <button class="batch-button ${state.loadingVariantId === variant.id ? "is-loading" : ""}" type="button" data-create-variant="${variant.id}" ${
                     state.loadingVariantId ? "disabled" : ""
                   }>
-                    ${state.loadingVariantId === variant.id ? "처리 중" : `${escapeHtml(variant.label)} 만들기`}
+                    ${state.loadingVariantId === variant.id ? "처리 중" : `${escapeHtml(variant.label)} ${usesMeasuredPrep ? "실측 입력" : "만들기"}`}
                   </button>
                 `,
               )
@@ -1719,7 +1821,9 @@ function renderMakeScreen() {
                           <div class="log-name">${escapeHtml(batch.recipeName)} ${escapeHtml(batch.variantLabel)} ${
                       batch.status === "canceled" ? "(취소됨)" : ""
                     }</div>
-                          <div class="log-meta">${timeText(batch.createdAt)}${batch.canceledAt ? ` · 취소 ${timeText(batch.canceledAt)}` : ""}</div>
+                          <div class="log-meta">${[timeText(batch.createdAt), getMeasuredPrepBatchText(batch), batch.canceledAt ? `취소 ${timeText(batch.canceledAt)}` : ""]
+                            .filter(Boolean)
+                            .join(" · ")}</div>
                         </div>
                         ${
                           batch.status === "active"
@@ -1752,13 +1856,129 @@ function renderMakeScreen() {
   });
 }
 
-function createPrepBatch(recipeVariantId) {
+function roundPrepQty(value) {
+  const rounded = Math.round(Number(value || 0) * 1000) / 1000;
+  return Number.isFinite(rounded) ? rounded : 0;
+}
+
+function getPrepUsageItems(recipe, ingredients, measuredPrep = null) {
+  if (isMeasuredPrepRecipe(recipe)) {
+    if (!measuredPrep?.supplyId || !(Number(measuredPrep.calculatedQty) > 0)) return [];
+    return [
+      {
+        supplyId: measuredPrep.supplyId,
+        qty: measuredPrep.calculatedQty,
+        unit: measuredPrep.supplyUnit,
+        note: `${recipe.name} 제조 · ${measuredPrep.inputLabel} ${numberText(measuredPrep.inputQty)}${measuredPrep.inputUnit} × ${formatQuantityInputValue(
+          measuredPrep.ratio,
+        )} = ${measuredPrep.supplyName} ${numberText(measuredPrep.calculatedQty)}${measuredPrep.supplyUnit} 차감`,
+      },
+    ];
+  }
+
+  return ingredients.map((ingredient) => ({
+    supplyId: ingredient.supplyId,
+    qty: Number(ingredient.qty),
+    unit: ingredient.unit,
+  }));
+}
+
+function openMeasuredPrepModal(recipeVariantId) {
+  const variant = getVariant(recipeVariantId);
+  const recipe = getRecipe(variant?.recipeId);
+  const config = getMeasuredPrepConfig(recipe);
+  if (!variant || !recipe || !config.supply) {
+    alert("실측 계산에 사용할 차감 소모품을 관리자 화면에서 설정해주세요.");
+    return;
+  }
+
+  state.pendingMeasuredVariantId = recipeVariantId;
+  if (els.measuredPrepTitle) els.measuredPrepTitle.textContent = `${recipe.name} ${variant.label}`;
+  if (els.measuredPrepMessage) {
+    els.measuredPrepMessage.textContent = `${config.inputLabel} 무게를 입력하면 ${config.supply.name} 차감량이 자동 계산됩니다.`;
+  }
+  if (els.measuredPrepInputLabel) els.measuredPrepInputLabel.textContent = `${config.inputLabel}(${config.inputUnit})`;
+  if (els.measuredPrepInput) els.measuredPrepInput.value = "";
+  updateMeasuredPrepPreview();
+  if (els.measuredPrepModal) els.measuredPrepModal.hidden = false;
+  window.setTimeout(() => els.measuredPrepInput?.focus(), 0);
+}
+
+function closeMeasuredPrepModal() {
+  state.pendingMeasuredVariantId = null;
+  if (els.measuredPrepModal) els.measuredPrepModal.hidden = true;
+}
+
+function getPendingMeasuredPrepCalculation() {
+  const variant = getVariant(state.pendingMeasuredVariantId);
+  const recipe = getRecipe(variant?.recipeId);
+  const config = getMeasuredPrepConfig(recipe);
+  const inputQty = roundPrepQty(els.measuredPrepInput?.value);
+  const calculatedQty = roundPrepQty(inputQty * config.ratio);
+  return {
+    recipe,
+    variant,
+    config,
+    inputQty,
+    calculatedQty,
+  };
+}
+
+function updateMeasuredPrepPreview() {
+  const { config, inputQty, calculatedQty } = getPendingMeasuredPrepCalculation();
+  if (!els.measuredPrepPreview) return;
+  const supplyName = config.supply?.name || "차감 소모품";
+  const supplyUnit = config.supply?.unit || config.inputUnit || "g";
+  els.measuredPrepPreview.textContent =
+    inputQty > 0
+      ? `${supplyName} ${numberText(calculatedQty)}${supplyUnit} 차감`
+      : `${supplyName} 차감량 0${supplyUnit}`;
+}
+
+function confirmMeasuredPrep() {
+  const { recipe, variant, config, inputQty, calculatedQty } = getPendingMeasuredPrepCalculation();
+  if (!recipe || !variant || !config.supply) {
+    alert("실측 계산 설정을 확인해주세요.");
+    return;
+  }
+  if (!(inputQty > 0) || !(calculatedQty > 0)) {
+    alert(`${config.inputLabel} 무게를 입력해주세요.`);
+    els.measuredPrepInput?.focus();
+    return;
+  }
+
+  const measuredPrep = {
+    inputLabel: config.inputLabel,
+    inputQty,
+    inputUnit: config.inputUnit,
+    ratio: config.ratio,
+    supplyId: config.supply.id,
+    supplyName: config.supply.name,
+    supplyUnit: config.supply.unit,
+    calculatedQty,
+  };
+  closeMeasuredPrepModal();
+  createPrepBatch(variant.id, measuredPrep);
+}
+
+function createPrepBatch(recipeVariantId, measuredPrep = null) {
   if (state.loadingVariantId) return;
   const variant = getVariant(recipeVariantId);
   const recipe = getRecipe(variant?.recipeId);
   const ingredients = getIngredientsForVariant(recipeVariantId);
-  if (!variant || !recipe || !ingredients.length) {
+  const usesMeasuredPrep = isMeasuredPrepRecipe(recipe);
+  if (!variant || !recipe || (!usesMeasuredPrep && !ingredients.length)) {
     alert("선택한 배수의 레시피가 비어 있습니다. 관리자 화면에서 소모품 사용량을 확인해주세요.");
+    return;
+  }
+  if (usesMeasuredPrep && !measuredPrep) {
+    openMeasuredPrepModal(recipeVariantId);
+    return;
+  }
+
+  const usageItems = getPrepUsageItems(recipe, ingredients, measuredPrep);
+  if (!usageItems.length) {
+    alert("차감할 소모품을 확인해주세요. 관리자 화면에서 제조 방식을 설정해야 합니다.");
     return;
   }
 
@@ -1777,13 +1997,25 @@ function createPrepBatch(recipeVariantId) {
       updatedAt: createdAt,
       createdBy: "직원",
       status: "active",
+      ...(measuredPrep
+        ? {
+            measuredInputLabel: measuredPrep.inputLabel,
+            measuredInputQty: measuredPrep.inputQty,
+            measuredInputUnit: measuredPrep.inputUnit,
+            measuredRatio: measuredPrep.ratio,
+            measuredSupplyId: measuredPrep.supplyId,
+            measuredSupplyName: measuredPrep.supplyName,
+            measuredSupplyUnit: measuredPrep.supplyUnit,
+            measuredCalculatedQty: measuredPrep.calculatedQty,
+          }
+        : {}),
     };
 
     db.prepBatches.push(prepBatch);
-    ingredients.forEach((ingredient) => {
-      const supply = getSupply(ingredient.supplyId);
+    usageItems.forEach((item) => {
+      const supply = getSupply(item.supplyId);
       if (!supply) return;
-      const qty = Number(ingredient.qty);
+      const qty = Number(item.qty);
       supply.currentStock = Number(supply.currentStock) - qty;
       supply.updatedAt = createdAt;
       db.inventoryTransactions.push({
@@ -1794,10 +2026,10 @@ function createPrepBatch(recipeVariantId) {
         recipeId: recipe.id,
         recipeVariantId: variant.id,
         qtyChange: -qty,
-        unit: ingredient.unit || supply.unit,
+        unit: item.unit || supply.unit,
         type: "prep_consume",
         createdAt,
-        note: `${recipe.name} ${variant.label} 제조`,
+        note: item.note || `${recipe.name} ${variant.label} 제조`,
       });
     });
 
@@ -3440,6 +3672,7 @@ function renderRecipeAdmin(container) {
   }
   const variant = getVariant(state.selectedVariantId);
   const ingredients = getIngredientsForVariant(variant?.id);
+  const measuredConfig = getMeasuredPrepConfig(recipe);
 
   container.innerHTML = `
     <div class="recipe-admin-grid">
@@ -3495,6 +3728,37 @@ function renderRecipeAdmin(container) {
                     직원 화면에 표시
                   </label>
                 </div>
+                <h4 class="subheading">제조 방식</h4>
+                <div class="dense-grid">
+                  <label class="field">
+                    <span>방식</span>
+                    <select id="recipePrepMode">
+                      <option value="fixed" ${!isMeasuredPrepRecipe(recipe) ? "selected" : ""}>배수/고정 사용량</option>
+                      <option value="measured_ratio" ${isMeasuredPrepRecipe(recipe) ? "selected" : ""}>실측값 × 비율</option>
+                    </select>
+                  </label>
+                  <label class="field" data-measured-setting>
+                    <span>실측값 이름</span>
+                    <input id="recipeMeasuredInputLabel" type="text" value="${escapeAttr(measuredConfig.inputLabel)}" placeholder="우유크림 베이스" />
+                  </label>
+                  <label class="field" data-measured-setting>
+                    <span>차감 소모품</span>
+                    <select id="recipeMeasuredSupplyId">
+                      ${getSuppliesForAdmin()
+                        .map(
+                          (supply) => `
+                            <option value="${escapeAttr(supply.id)}" ${supply.id === measuredConfig.supply?.id ? "selected" : ""}>${escapeHtml(supply.name)}</option>
+                          `,
+                        )
+                        .join("")}
+                    </select>
+                  </label>
+                  <label class="field" data-measured-setting>
+                    <span>곱할 비율</span>
+                    <input id="recipeMeasuredRatio" type="number" min="0" step="0.01" value="${escapeAttr(formatQuantityInputValue(measuredConfig.ratio))}" />
+                  </label>
+                </div>
+                <p class="muted measured-setting-help" data-measured-setting>예: 우유크림 베이스 1,200g × 0.25 = 생크림 300g 차감</p>
                 <div class="button-row">
                   ${state.savedMessage ? `<span class="saved-note">${escapeHtml(state.savedMessage)}</span>` : ""}
                   <button class="button button--danger" type="button" id="deleteRecipe">재료 삭제</button>
@@ -3525,17 +3789,28 @@ function renderRecipeAdmin(container) {
                     사용
                   </label>
                 </div>
-                <h4 class="subheading">소모품 사용량</h4>
-                <div id="ingredientEditor">
-                  ${
-                    ingredients.length
-                      ? ingredients.map((ingredient) => renderIngredientRow(ingredient, getIngredientBaseQty(variant, ingredient))).join("")
-                      : `<p class="muted">등록된 소모품 사용량이 없습니다.</p>`
-                  }
-                </div>
-                <div class="button-row">
-                  <button class="button button--ghost" type="button" id="addIngredient">소모품 추가</button>
-                </div>
+                ${
+                  isMeasuredPrepRecipe(recipe)
+                    ? `
+                      <h4 class="subheading">실측 계산 차감</h4>
+                      <p class="muted">직원 화면에서 ${escapeHtml(measuredConfig.inputLabel)} 무게를 입력하면 ${escapeHtml(
+                        measuredConfig.supply?.name || "선택한 소모품",
+                      )}이(가) 비율대로 차감됩니다. 고정 소모품 사용량은 적용하지 않습니다.</p>
+                    `
+                    : `
+                      <h4 class="subheading">소모품 사용량</h4>
+                      <div id="ingredientEditor">
+                        ${
+                          ingredients.length
+                            ? ingredients.map((ingredient) => renderIngredientRow(ingredient, getIngredientBaseQty(variant, ingredient))).join("")
+                            : `<p class="muted">등록된 소모품 사용량이 없습니다.</p>`
+                        }
+                      </div>
+                      <div class="button-row">
+                        <button class="button button--ghost" type="button" id="addIngredient">소모품 추가</button>
+                      </div>
+                    `
+                }
               `
               : `<p class="muted">배수를 선택하거나 추가해주세요.</p>`
           }
@@ -3567,6 +3842,7 @@ function renderRecipeAdmin(container) {
   container.querySelector("#addIngredient")?.addEventListener("click", () => addVariantIngredient(container));
   container.querySelector("#saveRecipeAdmin")?.addEventListener("click", () => saveRecipeAdmin(container));
   container.querySelector("#deleteRecipe")?.addEventListener("click", deleteRecipe);
+  container.querySelector("#recipePrepMode")?.addEventListener("change", () => updateMeasuredRecipeSettingsVisibility(container));
   container.querySelector("#variantMultiplier")?.addEventListener("input", () => updateVariantIngredientQuantityPreview(container));
   container.querySelectorAll("[data-remove-ingredient]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -3576,6 +3852,14 @@ function renderRecipeAdmin(container) {
       saveDb();
       renderAdminScreen();
     });
+  });
+  updateMeasuredRecipeSettingsVisibility(container);
+}
+
+function updateMeasuredRecipeSettingsVisibility(container) {
+  const isMeasured = container.querySelector("#recipePrepMode")?.value === "measured_ratio";
+  container.querySelectorAll("[data-measured-setting]").forEach((element) => {
+    element.hidden = !isMeasured;
   });
 }
 
@@ -3841,6 +4125,11 @@ function applyRecipeAdminFormValues(container) {
   if (recipe) {
     recipe.name = container.querySelector("#recipeName")?.value.trim() || recipe.name;
     recipe.isActive = Boolean(container.querySelector("#recipeActive")?.checked);
+    recipe.prepMode = container.querySelector("#recipePrepMode")?.value === "measured_ratio" ? "measured_ratio" : "fixed";
+    recipe.measuredInputLabel = container.querySelector("#recipeMeasuredInputLabel")?.value.trim() || "실측 무게";
+    recipe.measuredInputUnit = "g";
+    recipe.measuredSupplyId = container.querySelector("#recipeMeasuredSupplyId")?.value || recipe.measuredSupplyId || "";
+    recipe.measuredRatio = normalizeMeasuredRatio(container.querySelector("#recipeMeasuredRatio")?.value || recipe.measuredRatio);
     recipe.updatedAt = now;
   }
   if (variant) {
@@ -5444,6 +5733,9 @@ els.cancelConfirm.addEventListener("click", () => {
   closeCancelModal();
   renderMakeScreen();
 });
+els.measuredPrepClose?.addEventListener("click", closeMeasuredPrepModal);
+els.measuredPrepInput?.addEventListener("input", updateMeasuredPrepPreview);
+els.measuredPrepConfirm?.addEventListener("click", confirmMeasuredPrep);
 els.alarmAck.addEventListener("click", acknowledgeAlarm);
 els.alarmSnooze.addEventListener("click", snoozeAlarm);
 els.attendanceConfirmClose?.addEventListener("click", closeAttendanceConfirmModal);
@@ -5452,6 +5744,7 @@ els.attendanceConfirmFinal?.addEventListener("click", finalizeAttendanceRecord);
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeCancelModal();
+    closeMeasuredPrepModal();
     closeAttendanceConfirmModal();
   }
 });
