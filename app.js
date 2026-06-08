@@ -36,6 +36,7 @@ const LOG_RETENTION_DAYS = {
   prepBatches: 90,
   operationRecords: 180,
 };
+const ADMIN_UNLOCK_DURATION_MS = 10 * 60 * 1000;
 const ALARM_HISTORY_LIMIT = 8;
 const ALARM_SOUND_BUCKET = "alarm-sounds";
 const ALARM_SOUND_PUBLIC_BASE_URL = `${SUPABASE_URL}/storage/v1/object/public/${ALARM_SOUND_BUCKET}`;
@@ -167,6 +168,7 @@ let speechVoicesPrepared = false;
 const state = {
   screen: "make",
   adminUnlocked: false,
+  adminUnlockedUntil: 0,
   adminMenu: "summary",
   selectedRecipeId: null,
   selectedVariantId: null,
@@ -1709,10 +1711,30 @@ function getOpenAlarmEventsToday() {
     .sort((a, b) => new Date(b.triggeredAt) - new Date(a.triggeredAt));
 }
 
+function unlockAdminSession() {
+  state.adminUnlocked = true;
+  state.adminUnlockedUntil = Date.now() + ADMIN_UNLOCK_DURATION_MS;
+}
+
+function isAdminSessionActive() {
+  return Boolean(state.adminUnlocked && state.adminUnlockedUntil > Date.now());
+}
+
+function expireAdminSession({ renderIfNeeded = false } = {}) {
+  if (!state.adminUnlocked) return false;
+  if (isAdminSessionActive()) return false;
+  state.adminUnlocked = false;
+  state.adminUnlockedUntil = 0;
+  state.savedMessage = "";
+  if (renderIfNeeded && state.screen === "admin") render();
+  return true;
+}
+
 function setScreen(screen) {
+  expireAdminSession();
   state.screen = screen;
   state.savedMessage = "";
-  if (screen === "admin" && !state.adminUnlocked) {
+  if (screen === "admin" && !isAdminSessionActive()) {
     render();
     return;
   }
@@ -3091,7 +3113,8 @@ function resolveHandoverNote(noteId, resolvedBy) {
 }
 
 function renderAdminScreen() {
-  if (!state.adminUnlocked) {
+  expireAdminSession();
+  if (!isAdminSessionActive()) {
     renderAdminPin();
     return;
   }
@@ -3170,7 +3193,7 @@ function renderAdminPin() {
   const submit = els.workArea.querySelector("#pinSubmit");
   const unlock = () => {
     if (input.value === db.settings.adminPin) {
-      state.adminUnlocked = true;
+      unlockAdminSession();
       renderAdminScreen();
     } else {
       alert("PIN이 맞지 않습니다.");
@@ -5875,3 +5898,4 @@ initRemoteSync();
 setupAutomaticAudioUnlock();
 setInterval(updateCurrentDateTime, 1000);
 setInterval(checkAlarms, 15 * 1000);
+setInterval(() => expireAdminSession({ renderIfNeeded: true }), 5 * 1000);
