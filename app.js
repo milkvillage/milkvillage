@@ -3118,6 +3118,7 @@ function renderAdminScreen() {
     renderAdminPin();
     return;
   }
+  if (state.adminMenu === "logs") state.adminMenu = "prepLogs";
 
   const menuLabels = [
     ["summary", "오늘 요약"],
@@ -3128,7 +3129,8 @@ function renderAdminScreen() {
     ["alarms", "알림 관리"],
     ["alarmLogs", "알림 기록"],
     ["analysis", "소모량 분석"],
-    ["logs", "전체 로그 확인"],
+    ["prepLogs", "제조 로그(전체)"],
+    ["inventoryLogs", "입고/재고 로그(전체)"],
   ];
   const activeLabel = menuLabels.find(([key]) => key === state.adminMenu)?.[1] || "관리자";
 
@@ -3172,7 +3174,8 @@ function renderAdminScreen() {
   if (state.adminMenu === "alarms") renderAlarmsAdmin(body);
   if (state.adminMenu === "alarmLogs") renderAlarmLogsAdmin(body);
   if (state.adminMenu === "analysis") renderUsageAnalysisAdmin(body);
-  if (state.adminMenu === "logs") renderAllLogsAdmin(body);
+  if (state.adminMenu === "prepLogs") renderPrepLogsAdmin(body);
+  if (state.adminMenu === "inventoryLogs") renderInventoryLogsAdmin(body);
 }
 
 function renderAdminPin() {
@@ -5047,12 +5050,11 @@ function renderUsageAnalysisAdmin(container) {
   });
 }
 
-function renderAllLogsAdmin(container) {
+function renderPrepLogsAdmin(container) {
   const batches = [...db.prepBatches].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-  const transactions = [...db.inventoryTransactions].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   container.innerHTML = `
     <div class="admin-card">
-      <h3>제조 배치 로그</h3>
+      <h3>제조 로그(전체)</h3>
       <p class="muted">제조 로그는 최근 ${LOG_RETENTION_DAYS.prepBatches}일만 자동 보관합니다.</p>
       <div class="table-wrap">
         <table>
@@ -5085,16 +5087,26 @@ function renderAllLogsAdmin(container) {
         </table>
       </div>
     </div>
+  `;
+}
+
+function renderInventoryLogsAdmin(container) {
+  const transactions = [...db.inventoryTransactions]
+    .filter((transaction) => ["stock_received", "manual_adjustment"].includes(transaction.type))
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  container.innerHTML = `
     <div class="admin-card">
-      <h3>재고 상세 거래 로그</h3>
-      <p class="muted">재고 상세 거래 로그는 최근 ${LOG_RETENTION_DAYS.inventoryTransactions}일만 자동 보관합니다.</p>
+      <h3>입고/재고 로그(전체)</h3>
+      <p class="muted">관리자 화면에서 처리한 입고 추가와 수동 재고 조정 로그입니다. 최근 ${LOG_RETENTION_DAYS.inventoryTransactions}일만 자동 보관합니다.</p>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>소모품</th>
+              <th>품목명</th>
+              <th>구분</th>
               <th>변동량</th>
-              <th>유형</th>
+              <th>구매수량(ea)</th>
+              <th>주문 단위 용량</th>
               <th>시간</th>
               <th>메모</th>
             </tr>
@@ -5107,15 +5119,17 @@ function renderAllLogsAdmin(container) {
                       (transaction) => `
                         <tr>
                           <td>${escapeHtml(transaction.supplyName)}</td>
-                          <td>${numberText(transaction.qtyChange)}${escapeHtml(transaction.unit)}</td>
                           <td>${transactionTypeLabel(transaction.type)}</td>
+                          <td>${formatSignedQuantity(transaction.qtyChange)}${escapeHtml(transaction.unit)}</td>
+                          <td>${transaction.packageCount ? `${numberText(transaction.packageCount)}ea` : "-"}</td>
+                          <td>${transaction.purchaseUnitQty ? `${numberText(transaction.purchaseUnitQty)}${escapeHtml(transaction.unit)}` : "-"}</td>
                           <td>${dateTimeText(transaction.createdAt)}</td>
                           <td>${escapeHtml(transaction.note || "-")}</td>
                         </tr>
                       `,
                     )
                     .join("")
-                : `<tr><td colspan="5">거래 로그가 없습니다.</td></tr>`
+                : `<tr><td colspan="7">입고/재고 조정 로그가 없습니다.</td></tr>`
             }
           </tbody>
         </table>
@@ -5841,6 +5855,12 @@ function transactionTypeLabel(type) {
 
 function numberText(value) {
   return Number(value).toLocaleString("ko-KR");
+}
+
+function formatSignedQuantity(value) {
+  const numericValue = Number(value || 0);
+  const prefix = numericValue > 0 ? "+" : "";
+  return `${prefix}${numberText(numericValue)}`;
 }
 
 function escapeHtml(value) {
