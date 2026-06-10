@@ -4488,6 +4488,8 @@ function renderAdjustAdmin(container) {
   const receiveUnitQty = container.querySelector("#receiveUnitQty");
   const receivePackageCount = container.querySelector("#receivePackageCount");
   const receiveTotalQty = container.querySelector("#receiveTotalQty");
+  const supplySelect = container.querySelector("#adjustSupply");
+  const actualInput = container.querySelector("#adjustActual");
   const updateReceivePreview = () => {
     const unitQty = Number(receiveUnitQty.value || 0);
     const packageCount = Number(receivePackageCount.value || 0);
@@ -4496,6 +4498,8 @@ function renderAdjustAdmin(container) {
   receiveSelect.addEventListener("change", () => {
     const supply = getSupply(receiveSelect.value);
     receiveUnitQty.value = supply?.purchaseUnitQty || 1000;
+    supplySelect.value = receiveSelect.value;
+    actualInput.value = supply?.currentStock || 0;
     updateReceivePreview();
   });
   receiveUnitQty.addEventListener("input", updateReceivePreview);
@@ -4533,8 +4537,6 @@ function renderAdjustAdmin(container) {
     saveDb();
     renderAdminScreen();
   });
-  const supplySelect = container.querySelector("#adjustSupply");
-  const actualInput = container.querySelector("#adjustActual");
   supplySelect.addEventListener("change", () => {
     actualInput.value = getSupply(supplySelect.value)?.currentStock || 0;
   });
