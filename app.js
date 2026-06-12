@@ -5094,13 +5094,12 @@ function renderPrepLogsAdmin(container) {
 
 function renderInventoryLogsAdmin(container) {
   const transactions = [...db.inventoryTransactions]
-    .filter((transaction) => ["stock_received", "manual_adjustment", "inventory_cancel_reverse"].includes(transaction.type))
+    .filter((transaction) => ["stock_received", "manual_adjustment"].includes(transaction.type))
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   container.innerHTML = `
     <div class="admin-card">
       <h3>입고/재고 로그(전체)</h3>
       <p class="muted">관리자 화면에서 처리한 입고 추가와 수동 재고 조정 로그입니다. 최근 ${LOG_RETENTION_DAYS.inventoryTransactions}일만 자동 보관합니다.</p>
-      ${state.savedMessage ? `<div class="saved-note">${escapeHtml(state.savedMessage)}</div>` : ""}
       <div class="table-wrap">
         <table>
           <thead>
@@ -5112,7 +5111,6 @@ function renderInventoryLogsAdmin(container) {
               <th>주문 단위 용량</th>
               <th>시간</th>
               <th>메모</th>
-              <th>처리</th>
             </tr>
           </thead>
           <tbody>
@@ -5129,77 +5127,17 @@ function renderInventoryLogsAdmin(container) {
                           <td>${transaction.purchaseUnitQty ? `${numberText(transaction.purchaseUnitQty)}${escapeHtml(transaction.unit)}` : "-"}</td>
                           <td>${dateTimeText(transaction.createdAt)}</td>
                           <td>${escapeHtml(transaction.note || "-")}</td>
-                          <td>
-                            ${
-                              isCancelableInventoryTransaction(transaction)
-                                ? `<button class="button button--danger button--small" type="button" data-cancel-inventory-transaction="${transaction.id}">취소</button>`
-                                : `<span class="muted">${transaction.type === "inventory_cancel_reverse" ? "복구 기록" : "취소됨"}</span>`
-                            }
-                          </td>
                         </tr>
                       `,
                     )
                     .join("")
-                : `<tr><td colspan="8">입고/재고 조정 로그가 없습니다.</td></tr>`
+                : `<tr><td colspan="7">입고/재고 조정 로그가 없습니다.</td></tr>`
             }
           </tbody>
         </table>
       </div>
     </div>
   `;
-  container.querySelectorAll("[data-cancel-inventory-transaction]").forEach((button) => {
-    button.addEventListener("click", () => cancelInventoryTransaction(button.dataset.cancelInventoryTransaction));
-  });
-}
-
-function isCancelableInventoryTransaction(transaction) {
-  return (
-    ["stock_received", "manual_adjustment"].includes(transaction?.type) &&
-    !transaction.canceledAt &&
-    transaction.status !== "canceled" &&
-    !db.inventoryTransactions.some((item) => item.reversesTransactionId === transaction.id)
-  );
-}
-
-function cancelInventoryTransaction(transactionId) {
-  const transaction = db.inventoryTransactions.find((item) => item.id === transactionId);
-  if (!transaction || !isCancelableInventoryTransaction(transaction)) return;
-  const supply = getSupply(transaction.supplyId);
-  if (!supply) {
-    alert("해당 품목을 찾을 수 없어 취소할 수 없습니다.");
-    return;
-  }
-  const qtyChange = Number(transaction.qtyChange || 0);
-  const unit = transaction.unit || supply.unit || "";
-  const reverseQty = -qtyChange;
-  const message = `${transaction.supplyName} ${transactionTypeLabel(transaction.type)} 기록을 정말 취소할까요?\n\n재고가 ${formatSignedQuantity(reverseQty)}${unit} 만큼 되돌아갑니다.`;
-  if (!confirm(message)) return;
-
-  const canceledAt = nowIso();
-  supply.currentStock = Number(supply.currentStock || 0) + reverseQty;
-  supply.updatedAt = canceledAt;
-  transaction.status = "canceled";
-  transaction.canceledAt = canceledAt;
-  transaction.updatedAt = canceledAt;
-  transaction.cancelReason = "관리자 로그 취소";
-
-  const reverseTransaction = {
-    id: uid("txn"),
-    supplyId: supply.id,
-    supplyName: supply.name,
-    qtyChange: reverseQty,
-    unit,
-    type: "inventory_cancel_reverse",
-    createdAt: canceledAt,
-    note: `${transactionTypeLabel(transaction.type)} 취소`,
-    reversesTransactionId: transaction.id,
-    originalType: transaction.type,
-  };
-  db.inventoryTransactions.push(reverseTransaction);
-  transaction.canceledReverseTransactionId = reverseTransaction.id;
-  state.savedMessage = `${supply.name} ${transactionTypeLabel(transaction.type)} 기록을 취소했습니다.`;
-  saveDb();
-  renderAdminScreen();
 }
 
 function triggerAlarm(alarm, source = "schedule", scheduledAt = "") {
@@ -5914,7 +5852,6 @@ function transactionTypeLabel(type) {
     prep_cancel_reverse: "취소 복구",
     manual_adjustment: "수동 조정",
     stock_received: "입고 추가",
-    inventory_cancel_reverse: "입고/재고 취소",
   }[type] || type;
 }
 
