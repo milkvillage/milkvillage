@@ -27,7 +27,9 @@
 body {
   margin: 0;
   min-width: 320px;
-  min-height: 100vh;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
   background: var(--bg);
   color: var(--text);
 }
@@ -58,9 +60,10 @@ p {
 }
 
 .app-shell {
-  min-height: 100vh;
+  height: 100vh;
   display: grid;
-  grid-template-rows: 84px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .top-bar {
@@ -127,15 +130,19 @@ h1 {
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(220px, 22%) minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .side-nav {
+  min-height: 0;
   padding: 22px 18px;
   border-right: 1px solid var(--line);
   background: #edf2f4;
   display: flex;
   flex-direction: column;
   gap: 14px;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .work-area {
@@ -143,6 +150,7 @@ h1 {
   min-height: 0;
   padding: 22px;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .pill-button,
@@ -270,7 +278,8 @@ h1 {
 }
 
 .make-layout {
-  min-height: calc(100vh - 128px);
+  min-height: 0;
+  height: 100%;
   display: grid;
   grid-template-columns: minmax(520px, 68%) minmax(260px, 32%);
   gap: 18px;
@@ -467,13 +476,15 @@ h1 {
 }
 
 .order-screen {
-  min-height: calc(100vh - 128px);
+  min-height: 0;
+  height: 100%;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
 }
 
 .table-wrap {
   overflow: auto;
+  overscroll-behavior: contain;
 }
 
 table {
@@ -614,18 +625,23 @@ th {
 }
 
 .admin-screen {
-  min-height: calc(100vh - 128px);
+  min-height: 0;
+  height: 100%;
   display: grid;
   grid-template-columns: minmax(210px, 22%) minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .admin-menu {
+  min-height: 0;
   padding: 18px;
   border-right: 1px solid var(--line);
   background: #f7f9fa;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .admin-menu-button {
@@ -645,13 +661,16 @@ th {
 
 .admin-content {
   min-width: 0;
+  min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .admin-body {
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .recipe-admin-grid {
@@ -1268,7 +1287,8 @@ th {
 }
 
 .ops-screen {
-  min-height: calc(100vh - 128px);
+  min-height: 0;
+  height: 100%;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1540,7 +1560,8 @@ th {
 }
 
 .attendance-screen {
-  min-height: calc(100vh - 128px);
+  min-height: 0;
+  height: 100%;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1942,7 +1963,27 @@ th {
 }
 
 .admin-card {
+  min-width: 0;
   padding: 18px;
+}
+
+.admin-card--supplies {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.supply-admin-table-wrap {
+  min-height: 0;
+  max-height: 100%;
+}
+
+.supply-admin-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  box-shadow: 0 1px 0 var(--line);
 }
 
 .admin-card + .admin-card {
@@ -2192,14 +2233,17 @@ th {
 
   .dashboard {
     grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .side-nav {
     flex-direction: row;
+    min-height: auto;
     padding: 12px;
     border-right: 0;
     border-bottom: 1px solid var(--line);
     overflow-x: auto;
+    overflow-y: hidden;
   }
 
   .nav-item {
@@ -2220,7 +2264,8 @@ th {
   .order-screen,
   .ops-screen,
   .admin-screen {
-    min-height: auto;
+    min-height: 0;
+    height: 100%;
   }
 
   .ops-body,

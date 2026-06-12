@@ -186,6 +186,7 @@ const state = {
   pendingAttendanceStatus: null,
   pendingAttendanceKey: "",
   pendingAttendanceDraft: null,
+  suppliesUndoSnapshot: null,
   activeAlarmEventId: null,
   audioUnlocked: false,
   savedMessage: "",
@@ -1732,6 +1733,7 @@ function expireAdminSession({ renderIfNeeded = false } = {}) {
 
 function setScreen(screen) {
   expireAdminSession();
+  if (screen !== "admin") state.suppliesUndoSnapshot = null;
   state.screen = screen;
   state.savedMessage = "";
   if (screen === "admin" && !isAdminSessionActive()) {
@@ -3159,6 +3161,7 @@ function renderAdminScreen() {
 
   els.workArea.querySelectorAll("[data-admin-menu]").forEach((button) => {
     button.addEventListener("click", () => {
+      if (button.dataset.adminMenu !== "supplies") state.suppliesUndoSnapshot = null;
       state.adminMenu = button.dataset.adminMenu;
       state.savedMessage = "";
       renderAdminScreen();
@@ -4227,8 +4230,8 @@ function saveRecipeAdmin(container) {
 function renderSuppliesAdmin(container) {
   const supplies = getSuppliesForAdmin();
   container.innerHTML = `
-    <div class="admin-card">
-      <div class="table-wrap">
+    <div class="admin-card admin-card--supplies">
+      <div class="table-wrap supply-admin-table-wrap">
         <table class="supply-admin-table">
           <thead>
             <tr>
@@ -4276,12 +4279,14 @@ function renderSuppliesAdmin(container) {
       </div>
       <div class="button-row">
         ${state.savedMessage ? `<span class="saved-note">${escapeHtml(state.savedMessage)}</span>` : ""}
+        <button class="button button--ghost" id="undoSupplies" type="button">되돌리기</button>
         <button class="button button--ghost" id="addSupply" type="button">소모품 추가</button>
         <button class="button button--primary" id="saveSupplies" type="button">저장</button>
       </div>
     </div>
   `;
   setupSupplyDragSorting(container);
+  container.querySelector("#undoSupplies").addEventListener("click", () => undoSuppliesAdmin());
   container.querySelector("#addSupply").addEventListener("click", () => addSupply(container));
   container.querySelector("#saveSupplies").addEventListener("click", () => saveSuppliesAdmin(container));
   container.querySelectorAll("[data-delete-supply]").forEach((button) => {
@@ -4306,7 +4311,30 @@ function applySuppliesAdminFormValues(container) {
   });
 }
 
+function setSuppliesUndoSnapshot() {
+  state.suppliesUndoSnapshot = {
+    supplies: JSON.parse(JSON.stringify(db.supplies || [])),
+    recipeVariantIngredients: JSON.parse(JSON.stringify(db.recipeVariantIngredients || [])),
+    selectedAnalysisSupplyId: state.selectedAnalysisSupplyId,
+  };
+}
+
+function undoSuppliesAdmin() {
+  if (state.suppliesUndoSnapshot) {
+    db.supplies = JSON.parse(JSON.stringify(state.suppliesUndoSnapshot.supplies || []));
+    db.recipeVariantIngredients = JSON.parse(JSON.stringify(state.suppliesUndoSnapshot.recipeVariantIngredients || []));
+    state.selectedAnalysisSupplyId = state.suppliesUndoSnapshot.selectedAnalysisSupplyId || state.selectedAnalysisSupplyId;
+    state.suppliesUndoSnapshot = null;
+    state.savedMessage = "직전 변경을 되돌렸습니다.";
+    saveDb();
+  } else {
+    state.savedMessage = "저장 전 입력값으로 되돌렸습니다.";
+  }
+  renderAdminScreen();
+}
+
 function saveSuppliesAdmin(container) {
+  setSuppliesUndoSnapshot();
   applySuppliesAdminFormValues(container);
   state.savedMessage = "저장 완료";
   saveDb();
@@ -4315,6 +4343,7 @@ function saveSuppliesAdmin(container) {
 
 function addSupply(container) {
   applySuppliesAdminFormValues(container);
+  setSuppliesUndoSnapshot();
   const nextSortOrder = Math.max(0, ...db.supplies.map((supply) => Number(supply.sortOrder || 0))) + 1;
   db.supplies.push(makeSupply(uid("supply"), "새 소모품", "g", 0, 0, 0, "", 1000, nextSortOrder));
   state.savedMessage = "소모품을 추가했습니다.";
@@ -4326,6 +4355,7 @@ function deleteSupply(container, supplyId) {
   applySuppliesAdminFormValues(container);
   const supply = getSupply(supplyId);
   if (!supply) return;
+  setSuppliesUndoSnapshot();
   db.supplies = getSuppliesForAdmin().filter((item) => item.id !== supplyId);
   db.recipeVariantIngredients = db.recipeVariantIngredients.filter((ingredient) => ingredient.supplyId !== supplyId);
   if (state.selectedAnalysisSupplyId === supplyId) {
@@ -4401,6 +4431,7 @@ function moveSupply(sourceSupplyId, targetSupplyId, position = "before") {
   const targetIndex = ordered.findIndex((supply) => supply.id === targetSupplyId);
   if (sourceIndex < 0 || targetIndex < 0) return;
 
+  setSuppliesUndoSnapshot();
   const [movedSupply] = ordered.splice(sourceIndex, 1);
   const nextTargetIndex = ordered.findIndex((supply) => supply.id === targetSupplyId);
   ordered.splice(position === "after" ? nextTargetIndex + 1 : nextTargetIndex, 0, movedSupply);
@@ -5094,12 +5125,13 @@ function renderPrepLogsAdmin(container) {
 
 function renderInventoryLogsAdmin(container) {
   const transactions = [...db.inventoryTransactions]
-    .filter((transaction) => ["stock_received", "manual_adjustment"].includes(transaction.type))
+    .filter((transaction) => ["stock_received", "manual_adjustment", "inventory_cancel_reverse"].includes(transaction.type))
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   container.innerHTML = `
     <div class="admin-card">
       <h3>입고/재고 로그(전체)</h3>
       <p class="muted">관리자 화면에서 처리한 입고 추가와 수동 재고 조정 로그입니다. 최근 ${LOG_RETENTION_DAYS.inventoryTransactions}일만 자동 보관합니다.</p>
+      ${state.savedMessage ? `<div class="saved-note">${escapeHtml(state.savedMessage)}</div>` : ""}
       <div class="table-wrap">
         <table>
           <thead>
@@ -5111,6 +5143,7 @@ function renderInventoryLogsAdmin(container) {
               <th>주문 단위 용량</th>
               <th>시간</th>
               <th>메모</th>
+              <th>처리</th>
             </tr>
           </thead>
           <tbody>
@@ -5127,17 +5160,77 @@ function renderInventoryLogsAdmin(container) {
                           <td>${transaction.purchaseUnitQty ? `${numberText(transaction.purchaseUnitQty)}${escapeHtml(transaction.unit)}` : "-"}</td>
                           <td>${dateTimeText(transaction.createdAt)}</td>
                           <td>${escapeHtml(transaction.note || "-")}</td>
+                          <td>
+                            ${
+                              isCancelableInventoryTransaction(transaction)
+                                ? `<button class="button button--danger button--small" type="button" data-cancel-inventory-transaction="${transaction.id}">취소</button>`
+                                : `<span class="muted">${transaction.type === "inventory_cancel_reverse" ? "복구 기록" : "취소됨"}</span>`
+                            }
+                          </td>
                         </tr>
                       `,
                     )
                     .join("")
-                : `<tr><td colspan="7">입고/재고 조정 로그가 없습니다.</td></tr>`
+                : `<tr><td colspan="8">입고/재고 조정 로그가 없습니다.</td></tr>`
             }
           </tbody>
         </table>
       </div>
     </div>
   `;
+  container.querySelectorAll("[data-cancel-inventory-transaction]").forEach((button) => {
+    button.addEventListener("click", () => cancelInventoryTransaction(button.dataset.cancelInventoryTransaction));
+  });
+}
+
+function isCancelableInventoryTransaction(transaction) {
+  return (
+    ["stock_received", "manual_adjustment"].includes(transaction?.type) &&
+    !transaction.canceledAt &&
+    transaction.status !== "canceled" &&
+    !db.inventoryTransactions.some((item) => item.reversesTransactionId === transaction.id)
+  );
+}
+
+function cancelInventoryTransaction(transactionId) {
+  const transaction = db.inventoryTransactions.find((item) => item.id === transactionId);
+  if (!transaction || !isCancelableInventoryTransaction(transaction)) return;
+  const supply = getSupply(transaction.supplyId);
+  if (!supply) {
+    alert("해당 품목을 찾을 수 없어 취소할 수 없습니다.");
+    return;
+  }
+  const qtyChange = Number(transaction.qtyChange || 0);
+  const unit = transaction.unit || supply.unit || "";
+  const reverseQty = -qtyChange;
+  const message = `${transaction.supplyName} ${transactionTypeLabel(transaction.type)} 기록을 정말 취소할까요?\n\n재고가 ${formatSignedQuantity(reverseQty)}${unit} 만큼 되돌아갑니다.\n\n최종 확인을 누르면 되돌림 기록이 남습니다.`;
+  if (!confirm(message)) return;
+
+  const canceledAt = nowIso();
+  supply.currentStock = Number(supply.currentStock || 0) + reverseQty;
+  supply.updatedAt = canceledAt;
+  transaction.status = "canceled";
+  transaction.canceledAt = canceledAt;
+  transaction.updatedAt = canceledAt;
+  transaction.cancelReason = "관리자 로그 취소";
+
+  const reverseTransaction = {
+    id: uid("txn"),
+    supplyId: supply.id,
+    supplyName: supply.name,
+    qtyChange: reverseQty,
+    unit,
+    type: "inventory_cancel_reverse",
+    createdAt: canceledAt,
+    note: `${transactionTypeLabel(transaction.type)} 취소`,
+    reversesTransactionId: transaction.id,
+    originalType: transaction.type,
+  };
+  db.inventoryTransactions.push(reverseTransaction);
+  transaction.canceledReverseTransactionId = reverseTransaction.id;
+  state.savedMessage = `${supply.name} ${transactionTypeLabel(transaction.type)} 기록을 취소했습니다.`;
+  saveDb();
+  renderAdminScreen();
 }
 
 function triggerAlarm(alarm, source = "schedule", scheduledAt = "") {
@@ -5852,6 +5945,7 @@ function transactionTypeLabel(type) {
     prep_cancel_reverse: "취소 복구",
     manual_adjustment: "수동 조정",
     stock_received: "입고 추가",
+    inventory_cancel_reverse: "입고/재고 취소",
   }[type] || type;
 }
 
