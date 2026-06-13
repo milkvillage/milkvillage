@@ -37,6 +37,7 @@ const LOG_RETENTION_DAYS = {
   operationRecords: 180,
 };
 const ADMIN_UNLOCK_DURATION_MS = 10 * 60 * 1000;
+const VERSION_CHECK_INTERVAL_MS = 2 * 60 * 1000;
 const ALARM_HISTORY_LIMIT = 8;
 const ALARM_SOUND_BUCKET = "alarm-sounds";
 const ALARM_SOUND_PUBLIC_BASE_URL = `${SUPABASE_URL}/storage/v1/object/public/${ALARM_SOUND_BUCKET}`;
@@ -189,6 +190,9 @@ const state = {
   suppliesUndoSnapshot: null,
   activeAlarmEventId: null,
   audioUnlocked: false,
+  appVersion: "",
+  latestAppVersion: "",
+  updateStatus: "idle",
   savedMessage: "",
 };
 
@@ -199,6 +203,7 @@ const els = {
   navButtons: [...document.querySelectorAll(".nav-item")],
   adminShortcut: document.querySelector("#adminShortcut"),
   remoteStatus: document.querySelector("#remoteStatus"),
+  updateCheckButton: document.querySelector("#updateCheckButton"),
   soundUnlockButton: document.querySelector("#soundUnlockButton"),
   cancelModal: document.querySelector("#cancelModal"),
   cancelMessage: document.querySelector("#cancelMessage"),
@@ -307,6 +312,85 @@ function updateCurrentDateTime() {
     <span>${dateText}</span>
     <strong>${timeText}</strong>
   `;
+}
+
+function updateButtonIconSvg() {
+  return `<span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.5 6.2"/><path d="M3 12A9 9 0 0 1 18.5 5.8"/><path d="M3 18v-6h6"/><path d="M21 6v6h-6"/></svg></span>`;
+}
+
+function renderUpdateStatus() {
+  const button = els.updateCheckButton;
+  if (!button) return;
+  const status = state.updateStatus || "idle";
+  const labels = {
+    idle: "업데이트 확인",
+    checking: "확인 중",
+    current: "최신 버전",
+    available: "업데이트 필요",
+    applying: "적용 중",
+    error: "확인 실패",
+  };
+  button.className = `pill-button update-button update-button--${status}`;
+  button.disabled = status === "checking" || status === "applying";
+  button.setAttribute(
+    "aria-label",
+    state.latestAppVersion && state.latestAppVersion !== state.appVersion
+      ? `업데이트 필요: 현재 ${state.appVersion || "알 수 없음"}, 최신 ${state.latestAppVersion}`
+      : `업데이트 확인: 현재 ${state.appVersion || "알 수 없음"}`,
+  );
+  button.innerHTML = `${updateButtonIconSvg()}${labels[status] || labels.idle}`;
+}
+
+async function fetchAppVersion() {
+  const response = await fetch(`./version.json?check=${Date.now()}`, { cache: "no-store" });
+  if (!response.ok) throw new Error("Version check failed");
+  const data = await response.json();
+  return String(data.version || "dev");
+}
+
+async function checkForAppUpdate({ silent = false } = {}) {
+  if (state.updateStatus === "checking" || state.updateStatus === "applying") return;
+  if (!silent) {
+    state.updateStatus = "checking";
+    renderUpdateStatus();
+  }
+  try {
+    if (!state.appVersion) state.appVersion = await window.__MILK_VILLAGE_VERSION__.catch(() => "dev");
+    const latestVersion = await fetchAppVersion();
+    state.latestAppVersion = latestVersion;
+    state.updateStatus = latestVersion && latestVersion !== state.appVersion ? "available" : "current";
+  } catch (error) {
+    console.error(error);
+    state.updateStatus = silent ? state.updateStatus || "idle" : "error";
+  }
+  renderUpdateStatus();
+}
+
+async function applyAppUpdate() {
+  state.updateStatus = "applying";
+  renderUpdateStatus();
+  try {
+    const registration = await navigator.serviceWorker?.getRegistration?.();
+    await registration?.update?.();
+  } catch (error) {
+    console.warn(error);
+  }
+  window.location.reload();
+}
+
+async function handleUpdateButtonClick() {
+  if (state.updateStatus === "available") {
+    await applyAppUpdate();
+    return;
+  }
+  await checkForAppUpdate({ silent: false });
+}
+
+async function initUpdateChecker() {
+  state.appVersion = await window.__MILK_VILLAGE_VERSION__.catch(() => "dev");
+  state.latestAppVersion = state.appVersion;
+  renderUpdateStatus();
+  await checkForAppUpdate({ silent: true });
 }
 
 function localTimeValue(date = new Date()) {
@@ -5991,6 +6075,7 @@ els.alarmAck.addEventListener("click", acknowledgeAlarm);
 els.alarmSnooze.addEventListener("click", snoozeAlarm);
 els.attendanceConfirmClose?.addEventListener("click", closeAttendanceConfirmModal);
 els.attendanceConfirmFinal?.addEventListener("click", finalizeAttendanceRecord);
+els.updateCheckButton?.addEventListener("click", handleUpdateButtonClick);
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
@@ -6009,9 +6094,11 @@ document.addEventListener("visibilitychange", () => {
 
 render();
 updateCurrentDateTime();
+initUpdateChecker();
 prepareSpeechVoices();
 initRemoteSync();
 setupAutomaticAudioUnlock();
 setInterval(updateCurrentDateTime, 1000);
+setInterval(() => checkForAppUpdate({ silent: true }), VERSION_CHECK_INTERVAL_MS);
 setInterval(checkAlarms, 15 * 1000);
 setInterval(() => expireAdminSession({ renderIfNeeded: true }), 5 * 1000);

@@ -235,6 +235,39 @@ h1 {
   color: var(--red);
 }
 
+.update-button {
+  min-height: 36px;
+  padding: 7px 10px;
+  font-size: 14px;
+}
+
+.update-button .icon {
+  width: 18px;
+  height: 18px;
+  flex-basis: 18px;
+}
+
+.update-button--idle,
+.update-button--current {
+  color: var(--muted);
+  background: #eef2f4;
+}
+
+.update-button--checking {
+  color: #7c3d08;
+  background: var(--amber-soft);
+}
+
+.update-button--available {
+  color: #fff;
+  background: var(--red);
+}
+
+.update-button--error {
+  color: var(--red);
+  background: var(--red-soft);
+}
+
 .pill-button--admin {
   color: #763d0a;
   background: var(--amber-soft);

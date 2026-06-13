@@ -34,6 +34,12 @@
         <div class="top-actions">
           <time class="clock-display" id="currentDateTime" aria-label="현재 날짜와 시간"></time>
           <span class="remote-status" id="remoteStatus">DB 연결 준비</span>
+          <button class="pill-button update-button update-button--idle" id="updateCheckButton" type="button" aria-label="업데이트 확인">
+            <span class="icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.5 6.2"/><path d="M3 12A9 9 0 0 1 18.5 5.8"/><path d="M3 18v-6h6"/><path d="M21 6v6h-6"/></svg>
+            </span>
+            업데이트 확인
+          </button>
           <span class="pill-button pill-button--pending" id="soundUnlockButton" role="status" aria-live="polite" aria-label="음성 상태: OFF">
             <span class="icon" aria-hidden="true">
               <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19 6a9 9 0 0 1 0 12"/></svg>
