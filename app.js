@@ -187,7 +187,8 @@ const state = {
   pendingAttendanceStatus: null,
   pendingAttendanceKey: "",
   pendingAttendanceDraft: null,
-  suppliesUndoSnapshot: null,
+  suppliesUndoStack: [],
+  suppliesRedoStack: [],
   activeAlarmEventId: null,
   audioUnlocked: false,
   appVersion: "",
@@ -1817,7 +1818,7 @@ function expireAdminSession({ renderIfNeeded = false } = {}) {
 
 function setScreen(screen) {
   expireAdminSession();
-  if (screen !== "admin") state.suppliesUndoSnapshot = null;
+  if (screen !== "admin") clearSuppliesHistory();
   state.screen = screen;
   state.savedMessage = "";
   if (screen === "admin" && !isAdminSessionActive()) {
@@ -3245,7 +3246,7 @@ function renderAdminScreen() {
 
   els.workArea.querySelectorAll("[data-admin-menu]").forEach((button) => {
     button.addEventListener("click", () => {
-      if (button.dataset.adminMenu !== "supplies") state.suppliesUndoSnapshot = null;
+      if (button.dataset.adminMenu !== "supplies") clearSuppliesHistory();
       state.adminMenu = button.dataset.adminMenu;
       state.savedMessage = "";
       renderAdminScreen();
@@ -4362,15 +4363,32 @@ function renderSuppliesAdmin(container) {
         </table>
       </div>
       <div class="button-row">
-        ${state.savedMessage ? `<span class="saved-note">${escapeHtml(state.savedMessage)}</span>` : ""}
-        <button class="button button--ghost" id="undoSupplies" type="button">되돌리기</button>
+        <span class="saved-note" id="suppliesHistoryMessage">${state.savedMessage ? escapeHtml(state.savedMessage) : ""}</span>
+        <div class="supply-history-actions" aria-label="되돌리기와 다시 실행">
+          <button class="icon-button icon-button--history" id="undoSupplies" type="button" aria-label="되돌리기" title="되돌리기" ${
+            state.suppliesUndoStack.length ? "" : "disabled"
+          }>
+            <span class="icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M9 7 4 12l5 5"/><path d="M20 18a7 7 0 0 0-7-7H4"/></svg>
+            </span>
+          </button>
+          <button class="icon-button icon-button--history" id="redoSupplies" type="button" aria-label="다시 실행" title="다시 실행" ${
+            state.suppliesRedoStack.length ? "" : "disabled"
+          }>
+            <span class="icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="m15 7 5 5-5 5"/><path d="M4 18a7 7 0 0 1 7-7h9"/></svg>
+            </span>
+          </button>
+        </div>
         <button class="button button--ghost" id="addSupply" type="button">소모품 추가</button>
         <button class="button button--primary" id="saveSupplies" type="button">저장</button>
       </div>
     </div>
   `;
   setupSupplyDragSorting(container);
-  container.querySelector("#undoSupplies").addEventListener("click", () => undoSuppliesAdmin());
+  setupSuppliesFieldHistory(container);
+  container.querySelector("#undoSupplies").addEventListener("click", () => undoSuppliesAdmin(container));
+  container.querySelector("#redoSupplies").addEventListener("click", () => redoSuppliesAdmin(container));
   container.querySelector("#addSupply").addEventListener("click", () => addSupply(container));
   container.querySelector("#saveSupplies").addEventListener("click", () => saveSuppliesAdmin(container));
   container.querySelectorAll("[data-delete-supply]").forEach((button) => {
@@ -4395,30 +4413,160 @@ function applySuppliesAdminFormValues(container) {
   });
 }
 
-function setSuppliesUndoSnapshot() {
-  state.suppliesUndoSnapshot = {
+const supplyHistoryBindings = [
+  { attr: "data-supply-name", label: "소모품명" },
+  { attr: "data-supply-unit", label: "단위" },
+  { attr: "data-supply-stock", label: "현재 재고" },
+  { attr: "data-supply-min", label: "발주알림 기준량" },
+  { attr: "data-supply-purchase", label: "주문 단위 용량" },
+  { attr: "data-supply-order", label: "추천 발주량" },
+  { attr: "data-supply-active", label: "사용" },
+];
+
+function clearSuppliesHistory() {
+  state.suppliesUndoStack = [];
+  state.suppliesRedoStack = [];
+}
+
+function captureSuppliesState() {
+  return {
     supplies: JSON.parse(JSON.stringify(db.supplies || [])),
     recipeVariantIngredients: JSON.parse(JSON.stringify(db.recipeVariantIngredients || [])),
     selectedAnalysisSupplyId: state.selectedAnalysisSupplyId,
   };
 }
 
-function undoSuppliesAdmin() {
-  if (state.suppliesUndoSnapshot) {
-    db.supplies = JSON.parse(JSON.stringify(state.suppliesUndoSnapshot.supplies || []));
-    db.recipeVariantIngredients = JSON.parse(JSON.stringify(state.suppliesUndoSnapshot.recipeVariantIngredients || []));
-    state.selectedAnalysisSupplyId = state.suppliesUndoSnapshot.selectedAnalysisSupplyId || state.selectedAnalysisSupplyId;
-    state.suppliesUndoSnapshot = null;
-    state.savedMessage = "직전 변경을 되돌렸습니다.";
-    saveDb();
+function restoreSuppliesState(snapshot) {
+  db.supplies = JSON.parse(JSON.stringify(snapshot?.supplies || []));
+  db.recipeVariantIngredients = JSON.parse(JSON.stringify(snapshot?.recipeVariantIngredients || []));
+  state.selectedAnalysisSupplyId = snapshot?.selectedAnalysisSupplyId || state.selectedAnalysisSupplyId;
+}
+
+function pushSuppliesHistory(action) {
+  state.suppliesUndoStack.push(action);
+  if (state.suppliesUndoStack.length > 80) state.suppliesUndoStack.shift();
+  state.suppliesRedoStack = [];
+}
+
+function getSupplyHistoryInputValue(input) {
+  return input.type === "checkbox" ? (input.checked ? "1" : "0") : input.value;
+}
+
+function setSupplyHistoryInputValue(input, value) {
+  if (input.type === "checkbox") {
+    input.checked = value === "1";
   } else {
-    state.savedMessage = "저장 전 입력값으로 되돌렸습니다.";
+    input.value = value;
   }
-  renderAdminScreen();
+  input.dataset.supplyHistoryValue = value;
+}
+
+function getSupplyHistoryDescriptor(input) {
+  const binding = supplyHistoryBindings.find((item) => input.hasAttribute(item.attr));
+  if (!binding) return null;
+  return {
+    attr: binding.attr,
+    label: binding.label,
+    supplyId: input.getAttribute(binding.attr),
+  };
+}
+
+function findSupplyHistoryInput(container, action) {
+  return container.querySelector(`[${action.attr}="${action.supplyId}"]`);
+}
+
+function recordSupplyFieldChange(input) {
+  const descriptor = getSupplyHistoryDescriptor(input);
+  if (!descriptor) return false;
+  const before = input.dataset.supplyHistoryValue ?? getSupplyHistoryInputValue(input);
+  const after = getSupplyHistoryInputValue(input);
+  if (before === after) return false;
+  pushSuppliesHistory({ type: "field", ...descriptor, before, after });
+  input.dataset.supplyHistoryValue = after;
+  return true;
+}
+
+function recordPendingSupplyFieldChange(container) {
+  const activeInput = document.activeElement;
+  if (activeInput && container.contains(activeInput)) recordSupplyFieldChange(activeInput);
+}
+
+function setupSuppliesFieldHistory(container) {
+  supplyHistoryBindings.forEach(({ attr }) => {
+    container.querySelectorAll(`[${attr}]`).forEach((input) => {
+      input.dataset.supplyHistoryValue = getSupplyHistoryInputValue(input);
+      input.addEventListener("focus", () => {
+        input.dataset.supplyHistoryValue = getSupplyHistoryInputValue(input);
+      });
+      input.addEventListener("change", () => {
+        if (recordSupplyFieldChange(input)) updateSuppliesHistoryUi(container, `${getSupplyHistoryDescriptor(input)?.label || "입력값"} 변경 기록됨`);
+      });
+    });
+  });
+}
+
+function updateSuppliesHistoryUi(container, message = "") {
+  const messageElement = container.querySelector("#suppliesHistoryMessage");
+  if (messageElement) messageElement.textContent = message || state.savedMessage || "";
+  const undoButton = container.querySelector("#undoSupplies");
+  const redoButton = container.querySelector("#redoSupplies");
+  if (undoButton) undoButton.disabled = !state.suppliesUndoStack.length;
+  if (redoButton) redoButton.disabled = !state.suppliesRedoStack.length;
+}
+
+function applySupplyFieldHistoryAction(container, action, direction) {
+  const input = findSupplyHistoryInput(container, action);
+  if (!input) return false;
+  setSupplyHistoryInputValue(input, direction === "undo" ? action.before : action.after);
+  return true;
+}
+
+function undoSuppliesAdmin(container) {
+  recordPendingSupplyFieldChange(container);
+  const action = state.suppliesUndoStack.pop();
+  if (!action) {
+    updateSuppliesHistoryUi(container, "되돌릴 변경이 없습니다.");
+    return;
+  }
+  if (action.type === "field") {
+    applySupplyFieldHistoryAction(container, action, "undo");
+    state.suppliesRedoStack.push(action);
+    updateSuppliesHistoryUi(container, `${action.label} 1개를 되돌렸습니다. 저장을 누르면 반영됩니다.`);
+    return;
+  }
+  if (action.type === "snapshot") {
+    restoreSuppliesState(action.before);
+    state.suppliesRedoStack.push(action);
+    state.savedMessage = action.undoMessage || "직전 변경을 되돌렸습니다.";
+    saveDb();
+    renderAdminScreen();
+  }
+}
+
+function redoSuppliesAdmin(container) {
+  recordPendingSupplyFieldChange(container);
+  const action = state.suppliesRedoStack.pop();
+  if (!action) {
+    updateSuppliesHistoryUi(container, "다시 실행할 변경이 없습니다.");
+    return;
+  }
+  if (action.type === "field") {
+    applySupplyFieldHistoryAction(container, action, "redo");
+    state.suppliesUndoStack.push(action);
+    updateSuppliesHistoryUi(container, `${action.label} 1개를 다시 실행했습니다. 저장을 누르면 반영됩니다.`);
+    return;
+  }
+  if (action.type === "snapshot") {
+    restoreSuppliesState(action.after);
+    state.suppliesUndoStack.push(action);
+    state.savedMessage = action.redoMessage || "변경을 다시 실행했습니다.";
+    saveDb();
+    renderAdminScreen();
+  }
 }
 
 function saveSuppliesAdmin(container) {
-  setSuppliesUndoSnapshot();
+  recordPendingSupplyFieldChange(container);
   applySuppliesAdminFormValues(container);
   state.savedMessage = "저장 완료";
   saveDb();
@@ -4426,26 +4574,32 @@ function saveSuppliesAdmin(container) {
 }
 
 function addSupply(container) {
+  recordPendingSupplyFieldChange(container);
   applySuppliesAdminFormValues(container);
-  setSuppliesUndoSnapshot();
+  const before = captureSuppliesState();
   const nextSortOrder = Math.max(0, ...db.supplies.map((supply) => Number(supply.sortOrder || 0))) + 1;
   db.supplies.push(makeSupply(uid("supply"), "새 소모품", "g", 0, 0, 0, "", 1000, nextSortOrder));
+  const after = captureSuppliesState();
+  pushSuppliesHistory({ type: "snapshot", before, after, undoMessage: "소모품 추가를 되돌렸습니다.", redoMessage: "소모품 추가를 다시 실행했습니다." });
   state.savedMessage = "소모품을 추가했습니다.";
   saveDb();
   renderAdminScreen();
 }
 
 function deleteSupply(container, supplyId) {
+  recordPendingSupplyFieldChange(container);
   applySuppliesAdminFormValues(container);
   const supply = getSupply(supplyId);
   if (!supply) return;
-  setSuppliesUndoSnapshot();
+  const before = captureSuppliesState();
   db.supplies = getSuppliesForAdmin().filter((item) => item.id !== supplyId);
   db.recipeVariantIngredients = db.recipeVariantIngredients.filter((ingredient) => ingredient.supplyId !== supplyId);
   if (state.selectedAnalysisSupplyId === supplyId) {
     state.selectedAnalysisSupplyId = getSuppliesForAdmin()[0]?.id || null;
   }
   reorderSupplies(db.supplies);
+  const after = captureSuppliesState();
+  pushSuppliesHistory({ type: "snapshot", before, after, undoMessage: `${supply.name} 삭제를 되돌렸습니다.`, redoMessage: `${supply.name} 삭제를 다시 실행했습니다.` });
   state.savedMessage = `${supply.name} 소모품을 삭제했습니다.`;
   saveDb();
   renderAdminScreen();
@@ -4490,6 +4644,7 @@ function setupSupplyDragSorting(container) {
       event.preventDefault();
       const sourceId = event.dataTransfer?.getData("text/plain") || draggedSupplyId;
       const position = getSupplyDropPosition(event, row);
+      recordPendingSupplyFieldChange(container);
       applySuppliesAdminFormValues(container);
       clearSupplyDropMarkers(container);
       moveSupply(sourceId, row.dataset.supplyDrag, position);
@@ -4515,11 +4670,13 @@ function moveSupply(sourceSupplyId, targetSupplyId, position = "before") {
   const targetIndex = ordered.findIndex((supply) => supply.id === targetSupplyId);
   if (sourceIndex < 0 || targetIndex < 0) return;
 
-  setSuppliesUndoSnapshot();
+  const before = captureSuppliesState();
   const [movedSupply] = ordered.splice(sourceIndex, 1);
   const nextTargetIndex = ordered.findIndex((supply) => supply.id === targetSupplyId);
   ordered.splice(position === "after" ? nextTargetIndex + 1 : nextTargetIndex, 0, movedSupply);
   reorderSupplies(ordered);
+  const after = captureSuppliesState();
+  pushSuppliesHistory({ type: "snapshot", before, after, undoMessage: "소모품 순서 변경을 되돌렸습니다.", redoMessage: "소모품 순서 변경을 다시 실행했습니다." });
   state.savedMessage = "소모품 순서를 저장했습니다.";
   saveDb();
   renderAdminScreen();

@@ -1252,6 +1252,31 @@ th {
   place-items: center;
 }
 
+.supply-history-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.icon-button--history {
+  width: 48px;
+  height: 48px;
+  min-height: 48px;
+  border-radius: 999px;
+  background: #eef2f4;
+  color: var(--text);
+}
+
+.icon-button--history:hover {
+  background: var(--teal-soft);
+  color: var(--teal-dark);
+}
+
+.icon-button--history:disabled {
+  opacity: 0.38;
+  transform: none;
+}
+
 .button {
   display: inline-flex;
   align-items: center;
