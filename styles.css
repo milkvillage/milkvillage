@@ -1974,6 +1974,32 @@ th {
   grid-template-rows: minmax(0, 1fr) auto;
 }
 
+.admin-card--log {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.admin-card--log h3,
+.admin-card--log p {
+  flex: 0 0 auto;
+}
+
+.log-table-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 100%;
+}
+
+.log-table {
+  min-width: 760px;
+}
+
+.log-table--inventory {
+  min-width: 1120px;
+}
+
 .supply-admin-table-wrap {
   min-height: 0;
   max-height: 100%;

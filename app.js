@@ -4894,11 +4894,11 @@ function renderAlarmsAdminWithSelection(alarmId) {
 function renderAlarmLogsAdmin(container) {
   const logs = [...db.alarmEventLogs].sort((a, b) => new Date(b.triggeredAt) - new Date(a.triggeredAt));
   container.innerHTML = `
-    <div class="admin-card">
+    <div class="admin-card admin-card--log">
       <h3>알림 로그</h3>
       <p class="muted">알림 로그는 최근 ${LOG_RETENTION_DAYS.alarmEventLogs}일만 자동 보관합니다.</p>
-      <div class="table-wrap">
-        <table>
+      <div class="table-wrap log-table-wrap">
+        <table class="log-table">
           <thead>
             <tr>
               <th>알림</th>
@@ -5086,11 +5086,11 @@ function renderUsageAnalysisAdmin(container) {
 function renderPrepLogsAdmin(container) {
   const batches = [...db.prepBatches].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   container.innerHTML = `
-    <div class="admin-card">
+    <div class="admin-card admin-card--log">
       <h3>제조 로그(전체)</h3>
       <p class="muted">제조 로그는 최근 ${LOG_RETENTION_DAYS.prepBatches}일만 자동 보관합니다.</p>
-      <div class="table-wrap">
-        <table>
+      <div class="table-wrap log-table-wrap">
+        <table class="log-table">
           <thead>
             <tr>
               <th>재료</th>
@@ -5128,12 +5128,12 @@ function renderInventoryLogsAdmin(container) {
     .filter((transaction) => ["stock_received", "manual_adjustment", "inventory_cancel_reverse"].includes(transaction.type))
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   container.innerHTML = `
-    <div class="admin-card">
+    <div class="admin-card admin-card--log">
       <h3>입고/재고 로그(전체)</h3>
       <p class="muted">관리자 화면에서 처리한 입고 추가와 수동 재고 조정 로그입니다. 최근 ${LOG_RETENTION_DAYS.inventoryTransactions}일만 자동 보관합니다.</p>
       ${state.savedMessage ? `<div class="saved-note">${escapeHtml(state.savedMessage)}</div>` : ""}
-      <div class="table-wrap">
-        <table>
+      <div class="table-wrap log-table-wrap">
+        <table class="log-table log-table--inventory">
           <thead>
             <tr>
               <th>품목명</th>
