@@ -1186,14 +1186,14 @@ th {
 .manual-layout {
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(260px, 34%) minmax(0, 1fr);
+  grid-template-columns: minmax(220px, 28%) minmax(0, 1fr);
 }
 
 .manual-browser {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
   padding: 18px;
   border-right: 1px solid var(--line);
@@ -1201,12 +1201,21 @@ th {
   overflow: hidden;
 }
 
-.manual-search-field input {
-  min-height: 52px;
-  font-size: 18px;
+.manual-browser h3 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.2;
 }
 
-.manual-category-row,
+.manual-category-list {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
 .manual-pinned,
 .manual-keywords,
 .manual-admin-category-summary,
@@ -1218,12 +1227,14 @@ th {
 
 .manual-category-button,
 .manual-quick-button {
-  min-height: 38px;
-  padding: 8px 11px;
+  min-height: 56px;
+  padding: 12px 14px;
   border: 0;
-  border-radius: 999px;
+  border-radius: 8px;
   background: #eef2f4;
   color: var(--muted);
+  text-align: left;
+  font-size: 18px;
   font-weight: 900;
 }
 
@@ -1233,6 +1244,85 @@ th {
 .manual-quick-button:hover {
   background: var(--teal);
   color: #fff;
+}
+
+.manual-simple-list-panel {
+  min-width: 0;
+  min-height: 0;
+  padding: 20px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.manual-list-heading {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.manual-list-heading h3 {
+  margin: 0;
+  font-size: 26px;
+}
+
+.manual-list-heading span {
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.manual-card-list {
+  display: grid;
+  gap: 12px;
+}
+
+.manual-simple-card {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.55fr) minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.manual-simple-box {
+  display: grid;
+  gap: 7px;
+  padding: 14px;
+  border-radius: 8px;
+  background: #f1f5f6;
+}
+
+.manual-simple-box--script {
+  background: var(--teal-soft);
+}
+
+.manual-simple-box span {
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.manual-simple-box--script span {
+  color: var(--teal-dark);
+}
+
+.manual-simple-box p {
+  margin: 0;
+  color: var(--text);
+  font-size: 20px;
+  font-weight: 850;
+  line-height: 1.45;
+}
+
+.manual-simple-box--script p {
+  color: var(--teal-dark);
+  font-size: 22px;
+  font-weight: 950;
 }
 
 .manual-pinned {
@@ -2687,6 +2777,7 @@ th {
     .attendance-time-grid,
     .alarm-row,
     .manual-admin-grid,
+    .manual-simple-card,
     .analysis-summary,
     .checklist-item,
     .staff-admin-row,

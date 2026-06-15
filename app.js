@@ -1776,7 +1776,7 @@ function getServiceManual(manualId) {
 }
 
 function getServiceManualCategories(manuals = getActiveServiceManuals()) {
-  return [...new Set(manuals.map((manual) => manual.category || "기본 응대"))].sort((a, b) => a.localeCompare(b, "ko-KR"));
+  return [...new Set(manuals.map((manual) => manual.category || "기본 응대"))];
 }
 
 function serviceManualMatchesQuery(manual, query) {
@@ -2555,30 +2555,21 @@ function renderOpsScreen() {
 function renderServiceManualScreen() {
   const manuals = getActiveServiceManuals();
   const categories = getServiceManualCategories(manuals);
-  if (state.manualCategory !== "all" && !categories.includes(state.manualCategory)) {
-    state.manualCategory = "all";
+  if (!categories.includes(state.manualCategory)) {
+    state.manualCategory = categories[0] || "";
   }
-  const filteredManuals = getFilteredServiceManuals();
-  if (!state.selectedManualId || !filteredManuals.some((manual) => manual.id === state.selectedManualId)) {
-    state.selectedManualId = filteredManuals[0]?.id || null;
-  }
-  const selectedManual = getServiceManual(state.selectedManualId);
-  const pinnedManuals = filteredManuals.filter((manual) => manual.isPinned);
+  const categoryManuals = manuals.filter((manual) => manual.category === state.manualCategory);
 
   els.workArea.innerHTML = `
     <section class="manual-screen" aria-label="응대 메뉴얼">
       <div class="panel-header">
         <h2>응대 메뉴얼</h2>
-        <p>손님 질문이나 상황에 맞는 답변 문구를 빠르게 확인합니다.</p>
+        <p>카테고리를 선택하면 해당 응대 문구를 바로 확인할 수 있습니다.</p>
       </div>
       <div class="manual-layout">
         <aside class="manual-browser">
-          <label class="field manual-search-field">
-            <span>검색</span>
-            <input id="manualSearch" type="search" value="${escapeAttr(state.manualSearchQuery)}" placeholder="예: 포장, 영수증, 대기" autocomplete="off" />
-          </label>
-          <div class="manual-category-row" aria-label="응대 카테고리">
-            <button class="manual-category-button ${state.manualCategory === "all" ? "is-active" : ""}" type="button" data-manual-category="all">전체</button>
+          <h3>카테고리</h3>
+          <div class="manual-category-list" aria-label="응대 카테고리">
             ${categories
               .map(
                 (category) => `
@@ -2589,108 +2580,48 @@ function renderServiceManualScreen() {
               )
               .join("")}
           </div>
-          ${
-            pinnedManuals.length
-              ? `<div class="manual-pinned">
-                  <span>중요</span>
-                  ${pinnedManuals
-                    .map(
-                      (manual) => `
-                        <button class="manual-quick-button ${manual.id === selectedManual?.id ? "is-active" : ""}" type="button" data-select-manual="${manual.id}">
-                          ${escapeHtml(manual.title)}
-                        </button>
-                      `,
-                    )
-                    .join("")}
-                </div>`
-              : ""
-          }
-          <div class="manual-list">
-            ${
-              filteredManuals.length
-                ? filteredManuals
-                    .map(
-                      (manual) => `
-                        <button class="manual-list-button ${manual.id === selectedManual?.id ? "is-active" : ""}" type="button" data-select-manual="${manual.id}">
-                          <strong>${escapeHtml(manual.title)}</strong>
-                          <span>${escapeHtml(manual.category)}</span>
-                          <small>${escapeHtml(getManualPreviewText(manual))}</small>
-                        </button>
-                      `,
-                    )
-                    .join("")
-                : `<div class="empty-state">표시할 응대 메뉴얼이 없습니다.</div>`
-            }
-          </div>
         </aside>
-        <article class="manual-detail">
+        <section class="manual-simple-list-panel">
           ${
-            selectedManual
+            categories.length
               ? `
-                <div class="manual-detail-heading">
-                  <span class="badge">${escapeHtml(selectedManual.category)}</span>
-                  ${selectedManual.isPinned ? `<span class="badge badge--ok">중요</span>` : ""}
-                  <h3>${escapeHtml(selectedManual.title)}</h3>
+                <div class="manual-list-heading">
+                  <h3>${escapeHtml(state.manualCategory)}</h3>
+                  <span>${categoryManuals.length}개</span>
                 </div>
-                ${
-                  selectedManual.situation
-                    ? `<section class="manual-detail-section">
-                        <span>손님 질문 / 상황</span>
-                        <p>${escapeHtml(selectedManual.situation)}</p>
-                      </section>`
-                    : ""
-                }
-                <section class="manual-response-card">
-                  <span>이렇게 말하기</span>
-                  <p>${escapeHtml(selectedManual.response || "관리자 화면에서 답변 문구를 입력해주세요.")}</p>
-                </section>
-                ${
-                  selectedManual.caution
-                    ? `<section class="manual-detail-section">
-                        <span>주의사항</span>
-                        <p>${escapeHtml(selectedManual.caution)}</p>
-                      </section>`
-                    : ""
-                }
-                ${
-                  selectedManual.keywords
-                    ? `<div class="manual-keywords">${selectedManual.keywords
-                        .split(",")
-                        .map((keyword) => keyword.trim())
-                        .filter(Boolean)
-                        .map((keyword) => `<span>${escapeHtml(keyword)}</span>`)
-                        .join("")}</div>`
-                    : ""
-                }
+                <div class="manual-card-list">
+                  ${
+                    categoryManuals.length
+                      ? categoryManuals
+                          .map(
+                            (manual) => `
+                              <article class="manual-simple-card">
+                                <section class="manual-simple-box">
+                                  <span>상황</span>
+                                  <p>${escapeHtml(manual.situation || manual.title || "상황을 입력해주세요.")}</p>
+                                </section>
+                                <section class="manual-simple-box manual-simple-box--script">
+                                  <span>대사</span>
+                                  <p>${escapeHtml(manual.response || "관리자 화면에서 대사를 입력해주세요.")}</p>
+                                </section>
+                              </article>
+                            `,
+                          )
+                          .join("")
+                      : `<div class="empty-state">이 카테고리에 표시할 메뉴얼이 없습니다.</div>`
+                  }
+                </div>
               `
-              : `<div class="empty-state">왼쪽에서 응대 항목을 선택해주세요.</div>`
+              : `<div class="empty-state">관리자 화면에서 응대 메뉴얼을 추가해주세요.</div>`
           }
-        </article>
+        </section>
       </div>
     </section>
   `;
 
-  const searchInput = els.workArea.querySelector("#manualSearch");
-  searchInput?.addEventListener("input", () => {
-    state.manualSearchQuery = searchInput.value;
-    state.selectedManualId = null;
-    renderServiceManualScreen();
-    requestAnimationFrame(() => {
-      const nextInput = els.workArea.querySelector("#manualSearch");
-      nextInput?.focus();
-      nextInput?.setSelectionRange(state.manualSearchQuery.length, state.manualSearchQuery.length);
-    });
-  });
   els.workArea.querySelectorAll("[data-manual-category]").forEach((button) => {
     button.addEventListener("click", () => {
-      state.manualCategory = button.dataset.manualCategory || "all";
-      state.selectedManualId = null;
-      renderServiceManualScreen();
-    });
-  });
-  els.workArea.querySelectorAll("[data-select-manual]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.selectedManualId = button.dataset.selectManual;
+      state.manualCategory = button.dataset.manualCategory || "";
       renderServiceManualScreen();
     });
   });
