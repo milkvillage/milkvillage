@@ -1768,7 +1768,7 @@ function getServiceManualsForAdmin() {
 }
 
 function getActiveServiceManuals() {
-  return getServiceManualsForAdmin().filter((manual) => manual.isActive);
+  return getServiceManualsForAdmin();
 }
 
 function getServiceManual(manualId) {
@@ -1799,6 +1799,10 @@ function getFilteredServiceManuals() {
 
 function getManualPreviewText(manual) {
   return manual.response || manual.situation || manual.caution || "내용 없음";
+}
+
+function getServiceManualDisplayTitle(manual) {
+  return manual?.situation || manual?.response || manual?.title || "응대 메뉴얼";
 }
 
 function getWeekdayKeyFromDate(dateKey) {
@@ -3664,9 +3668,6 @@ function renderServiceManualsAdmin(container) {
           <h3>응대 항목</h3>
           <button class="button button--ghost button--small" id="addServiceManual" type="button">추가</button>
         </div>
-        <div class="manual-admin-category-summary">
-          ${categories.length ? categories.map((category) => `<span>${escapeHtml(category)}</span>`).join("") : `<span>카테고리 없음</span>`}
-        </div>
         <div class="list-stack manual-admin-list-stack">
           ${
             manuals.length
@@ -3674,8 +3675,8 @@ function renderServiceManualsAdmin(container) {
                   .map(
                     (item) => `
                       <button class="list-button list-button--draggable manual-admin-list-button ${item.id === manual?.id ? "is-active" : ""} ${item.isActive ? "" : "is-inactive"}" type="button" draggable="true" data-select-service-manual="${item.id}" data-service-manual-drag="${item.id}" title="드래그해서 순서 변경">
-                        <strong>${escapeHtml(item.title)}</strong>
-                        <span>${escapeHtml(item.category)}${item.isPinned ? " · 중요" : ""}${item.isActive ? "" : " · 숨김"}</span>
+                        <strong>${escapeHtml(getServiceManualDisplayTitle(item))}</strong>
+                        <span>${escapeHtml(item.category || "기본 응대")}</span>
                       </button>
                     `,
                   )
@@ -3693,45 +3694,21 @@ function renderServiceManualsAdmin(container) {
                   <h3>응대 내용 편집</h3>
                   ${state.savedMessage ? `<span class="saved-note">${escapeHtml(state.savedMessage)}</span>` : ""}
                 </div>
-                <div class="manual-admin-grid">
-                  <label class="field">
-                    <span>제목</span>
-                    <input id="serviceManualTitle" type="text" value="${escapeAttr(manual.title)}" placeholder="예: 포장 가능 여부" />
-                  </label>
-                  <label class="field">
-                    <span>카테고리</span>
-                    <input id="serviceManualCategory" type="text" value="${escapeAttr(manual.category)}" list="serviceManualCategoryOptions" placeholder="예: 포장/배달" />
-                    <datalist id="serviceManualCategoryOptions">
-                      ${categories.map((category) => `<option value="${escapeAttr(category)}"></option>`).join("")}
-                    </datalist>
-                  </label>
-                </div>
                 <label class="field">
-                  <span>손님 질문 / 상황</span>
-                  <textarea id="serviceManualSituation" placeholder="예: 손님이 포장 가능한지 물어볼 때">${escapeHtml(manual.situation)}</textarea>
+                  <span>카테고리</span>
+                  <input id="serviceManualCategory" type="text" value="${escapeAttr(manual.category)}" list="serviceManualCategoryOptions" placeholder="예: 인사" autocomplete="off" />
+                  <datalist id="serviceManualCategoryOptions">
+                    ${categories.map((category) => `<option value="${escapeAttr(category)}"></option>`).join("")}
+                  </datalist>
+                </label>
+                <label class="field">
+                  <span>상황</span>
+                  <textarea id="serviceManualSituation" placeholder="예: 손님이 매장에 들어왔을 때">${escapeHtml(manual.situation)}</textarea>
                 </label>
                 <label class="field manual-response-field">
-                  <span>직원이 말할 답변 문구</span>
-                  <textarea id="serviceManualResponse" placeholder="직원이 그대로 말할 수 있는 문장을 입력해주세요.">${escapeHtml(manual.response)}</textarea>
+                  <span>대사</span>
+                  <textarea id="serviceManualResponse" placeholder="예: 어서오세요, 밀크빌리지입니다.">${escapeHtml(manual.response)}</textarea>
                 </label>
-                <label class="field">
-                  <span>주의사항</span>
-                  <textarea id="serviceManualCaution" placeholder="실수하기 쉬운 부분이나 매니저 호출 기준을 입력해주세요.">${escapeHtml(manual.caution)}</textarea>
-                </label>
-                <label class="field">
-                  <span>검색 키워드</span>
-                  <input id="serviceManualKeywords" type="text" value="${escapeAttr(manual.keywords)}" placeholder="예: 포장, 테이크아웃, 아이스크림" />
-                </label>
-                <div class="manual-admin-options">
-                  <label class="check-field">
-                    <input id="serviceManualActive" type="checkbox" ${manual.isActive ? "checked" : ""} />
-                    직원 화면에 표시
-                  </label>
-                  <label class="check-field">
-                    <input id="serviceManualPinned" type="checkbox" ${manual.isPinned ? "checked" : ""} />
-                    중요 항목으로 고정
-                  </label>
-                </div>
                 <div class="alarm-action-row">
                   <button class="button button--danger" id="deleteServiceManual" type="button">삭제</button>
                   <button class="button button--primary" id="saveServiceManual" type="button">저장</button>
@@ -3752,28 +3729,41 @@ function renderServiceManualsAdmin(container) {
     });
   });
   setupServiceManualDragSorting(container);
+  setupServiceManualCategoryPicker(container);
   container.querySelector("#addServiceManual")?.addEventListener("click", () => addServiceManual(container));
   container.querySelector("#saveServiceManual")?.addEventListener("click", () => saveServiceManualAdmin(container));
   container.querySelector("#deleteServiceManual")?.addEventListener("click", deleteServiceManualAdmin);
 }
 
+function setupServiceManualCategoryPicker(container) {
+  const categoryInput = container.querySelector("#serviceManualCategory");
+  if (!categoryInput) return;
+  const openCategoryPicker = () => {
+    try {
+      categoryInput.showPicker?.();
+    } catch {}
+  };
+  categoryInput.addEventListener("focus", openCategoryPicker);
+  categoryInput.addEventListener("click", openCategoryPicker);
+}
+
 function applyServiceManualAdminValues(container) {
   const manual = getServiceManual(state.selectedAdminManualId);
   if (!manual) return true;
-  const titleInput = container.querySelector("#serviceManualTitle");
-  const title = titleInput?.value.trim() || "";
-  if (!title) {
-    titleInput?.focus();
+  const categoryInput = container.querySelector("#serviceManualCategory");
+  const category = categoryInput?.value.trim() || "";
+  if (!category) {
+    categoryInput?.focus();
     return false;
   }
-  manual.title = title;
-  manual.category = container.querySelector("#serviceManualCategory")?.value.trim() || "기본 응대";
   manual.situation = container.querySelector("#serviceManualSituation")?.value.trim() || "";
   manual.response = container.querySelector("#serviceManualResponse")?.value.trim() || "";
-  manual.caution = container.querySelector("#serviceManualCaution")?.value.trim() || "";
-  manual.keywords = container.querySelector("#serviceManualKeywords")?.value.trim() || "";
-  manual.isActive = Boolean(container.querySelector("#serviceManualActive")?.checked);
-  manual.isPinned = Boolean(container.querySelector("#serviceManualPinned")?.checked);
+  manual.category = category;
+  manual.title = manual.situation || manual.response || category;
+  manual.caution = "";
+  manual.keywords = "";
+  manual.isActive = true;
+  manual.isPinned = false;
   manual.updatedAt = nowIso();
   return true;
 }
@@ -3784,8 +3774,8 @@ function addServiceManual(container) {
   const manual = normalizeServiceManual(
     {
       id: uid("service_manual"),
-      category: "기본 응대",
-      title: "새 응대 메뉴얼",
+      category: getServiceManualCategories(getServiceManualsForAdmin())[0] || "기본 응대",
+      title: "새 상황",
       situation: "",
       response: "",
       caution: "",
@@ -3818,7 +3808,8 @@ function saveServiceManualAdmin(container) {
 function deleteServiceManualAdmin() {
   const manual = getServiceManual(state.selectedAdminManualId);
   if (!manual) return;
-  if (!confirm(`${manual.title} 응대 메뉴얼을 삭제할까요?`)) return;
+  const label = getServiceManualDisplayTitle(manual);
+  if (!confirm(`${label} 응대 메뉴얼을 삭제할까요?`)) return;
   db.operations.serviceManuals = getServiceManualsForAdmin().filter((item) => item.id !== manual.id);
   getServiceManualsForAdmin().forEach((item, index) => {
     item.sortOrder = index + 1;
@@ -3826,7 +3817,7 @@ function deleteServiceManualAdmin() {
   });
   if (state.selectedManualId === manual.id) state.selectedManualId = null;
   state.selectedAdminManualId = getServiceManualsForAdmin()[0]?.id || null;
-  state.savedMessage = `${manual.title} 메뉴얼을 삭제했습니다.`;
+  state.savedMessage = `${label} 메뉴얼을 삭제했습니다.`;
   saveDb();
   renderAdminScreen();
 }
