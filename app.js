@@ -178,6 +178,10 @@ const state = {
   selectedAttendanceStaffId: null,
   selectedAttendanceDate: todayDateKey(),
   attendanceMonth: todayDateKey().slice(0, 7),
+  manualCategory: "all",
+  manualSearchQuery: "",
+  selectedManualId: null,
+  selectedAdminManualId: null,
   selectedAlarmId: null,
   analysisMode: "weekday",
   operatorName: "",
@@ -606,6 +610,9 @@ function normalizeOperations(operations, fallbackOperations) {
     attendanceRecords: Array.isArray(operations?.attendanceRecords)
       ? operations.attendanceRecords.map(normalizeAttendanceRecord)
       : fallback.attendanceRecords,
+    serviceManuals: Array.isArray(operations?.serviceManuals)
+      ? operations.serviceManuals.map((manual, index) => normalizeServiceManual(manual, index))
+      : fallback.serviceManuals,
   };
 }
 
@@ -691,6 +698,24 @@ function normalizeAttendanceRecord(record) {
     adjustmentReason: record?.adjustmentReason || "",
     recordedAt: record?.recordedAt || record?.updatedAt || nowIso(),
     updatedAt: record?.updatedAt || record?.recordedAt || nowIso(),
+  };
+}
+
+function normalizeServiceManual(manual, index = 0) {
+  const sortOrder = Number(manual?.sortOrder);
+  return {
+    id: manual?.id || uid("service_manual"),
+    category: manual?.category || "기본 응대",
+    title: manual?.title || "새 응대 메뉴얼",
+    situation: manual?.situation || "",
+    response: manual?.response || "",
+    caution: manual?.caution || "",
+    keywords: manual?.keywords || "",
+    isPinned: Boolean(manual?.isPinned),
+    isActive: manual?.isActive !== false,
+    sortOrder: Number.isFinite(sortOrder) && sortOrder > 0 ? sortOrder : index + 1,
+    createdAt: manual?.createdAt || nowIso(),
+    updatedAt: manual?.updatedAt || manual?.createdAt || nowIso(),
   };
 }
 
@@ -1471,6 +1496,88 @@ function renderAlarmQuickChoices(values, datasetName) {
   `;
 }
 
+function makeDefaultServiceManuals(createdAt = nowIso()) {
+  return [
+    makeServiceManual(
+      "manual_greeting",
+      "기본 인사",
+      "입장 인사",
+      "손님이 매장에 들어왔을 때",
+      "어서오세요, 밀크빌리지입니다.",
+      "손님과 눈을 맞추고 밝게 인사합니다.",
+      "인사 입장 환영",
+      true,
+      1,
+      createdAt,
+    ),
+    makeServiceManual(
+      "manual_takeout",
+      "포장/배달",
+      "포장 가능 여부",
+      "손님이 포장 가능한지 물어볼 때",
+      "네, 포장 가능합니다. 다만 아이스크림이 들어간 메뉴는 이동 시간이 길면 녹을 수 있어서 바로 드시는 것을 추천드립니다.",
+      "이동 시간이 긴 손님에게는 녹을 수 있다는 점을 꼭 안내합니다.",
+      "포장 테이크아웃 배달 아이스크림",
+      true,
+      2,
+      createdAt,
+    ),
+    makeServiceManual(
+      "manual_waiting",
+      "대기/혼잡",
+      "주문 대기 안내",
+      "주문이 밀려 손님이 오래 기다릴 때",
+      "기다리게 해드려 죄송합니다. 현재 주문이 순서대로 준비 중이라 약간의 시간이 더 걸릴 수 있습니다. 최대한 빠르게 준비해드리겠습니다.",
+      "예상 시간을 임의로 짧게 말하지 말고, 현재 상황을 차분하게 안내합니다.",
+      "대기 지연 혼잡 주문",
+      false,
+      3,
+      createdAt,
+    ),
+    makeServiceManual(
+      "manual_complaint",
+      "클레임 응대",
+      "불편 사항 접수",
+      "손님이 맛, 서비스, 대기시간에 대해 불편을 말할 때",
+      "불편을 드려 죄송합니다. 말씀해주신 내용 바로 확인해보겠습니다. 잠시만 기다려주세요.",
+      "바로 반박하지 말고 먼저 사과와 확인을 진행합니다. 필요하면 매니저에게 전달합니다.",
+      "불편 클레임 항의 사과",
+      true,
+      4,
+      createdAt,
+    ),
+    makeServiceManual(
+      "manual_receipt",
+      "결제/영수증",
+      "영수증 요청",
+      "손님이 영수증이나 결제 내역을 요청할 때",
+      "네, 바로 확인해드리겠습니다. 결제하신 시간대나 결제수단을 알려주시면 더 빠르게 찾아드릴 수 있습니다.",
+      "개인정보가 보이지 않도록 POS 화면을 직원이 직접 확인합니다.",
+      "영수증 결제 카드 현금",
+      false,
+      5,
+      createdAt,
+    ),
+  ];
+}
+
+function makeServiceManual(id, category, title, situation, response, caution, keywords, isPinned, sortOrder, createdAt = nowIso()) {
+  return {
+    id,
+    category,
+    title,
+    situation,
+    response,
+    caution,
+    keywords,
+    isPinned,
+    isActive: true,
+    sortOrder,
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
 function makeDefaultOperations(createdAt = nowIso()) {
   const openTasks = [
     "매장 조명과 음악 켜기",
@@ -1500,6 +1607,7 @@ function makeDefaultOperations(createdAt = nowIso()) {
     handoverNotes: [],
     staffMembers: [],
     attendanceRecords: [],
+    serviceManuals: makeDefaultServiceManuals(createdAt),
   };
 }
 
@@ -1651,6 +1759,46 @@ function getActiveStaffMembers() {
 
 function getStaffMember(staffId) {
   return (db.operations?.staffMembers || []).find((staff) => staff.id === staffId);
+}
+
+function getServiceManualsForAdmin() {
+  return [...(db.operations?.serviceManuals || [])].sort(
+    (a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || a.title.localeCompare(b.title, "ko-KR"),
+  );
+}
+
+function getActiveServiceManuals() {
+  return getServiceManualsForAdmin().filter((manual) => manual.isActive);
+}
+
+function getServiceManual(manualId) {
+  return (db.operations?.serviceManuals || []).find((manual) => manual.id === manualId);
+}
+
+function getServiceManualCategories(manuals = getActiveServiceManuals()) {
+  return [...new Set(manuals.map((manual) => manual.category || "기본 응대"))].sort((a, b) => a.localeCompare(b, "ko-KR"));
+}
+
+function serviceManualMatchesQuery(manual, query) {
+  const normalizedQuery = String(query || "").trim().toLowerCase();
+  if (!normalizedQuery) return true;
+  return [manual.title, manual.category, manual.situation, manual.response, manual.caution, manual.keywords]
+    .join(" ")
+    .toLowerCase()
+    .includes(normalizedQuery);
+}
+
+function getFilteredServiceManuals() {
+  const category = state.manualCategory || "all";
+  const query = state.manualSearchQuery || "";
+  return getActiveServiceManuals()
+    .filter((manual) => category === "all" || manual.category === category)
+    .filter((manual) => serviceManualMatchesQuery(manual, query))
+    .sort((a, b) => Number(b.isPinned) - Number(a.isPinned) || Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
+}
+
+function getManualPreviewText(manual) {
+  return manual.response || manual.situation || manual.caution || "내용 없음";
 }
 
 function getWeekdayKeyFromDate(dateKey) {
@@ -1854,6 +2002,7 @@ function render() {
     orders: "발주(확인사항)",
     ops: "운영 체크(입력필수)",
     attendance: "근퇴기록(입력필수)",
+    manual: "응대 메뉴얼",
     admin: "관리자",
   };
   els.screenTitle.textContent = titleMap[state.screen];
@@ -1864,6 +2013,7 @@ function render() {
   if (state.screen === "orders") renderOrderScreen();
   if (state.screen === "ops") renderOpsScreen();
   if (state.screen === "attendance") renderAttendanceScreen();
+  if (state.screen === "manual") renderServiceManualScreen();
   if (state.screen === "admin") renderAdminScreen();
 }
 
@@ -2398,6 +2548,150 @@ function renderOpsScreen() {
         return;
       }
       resolveHandoverNote(button.dataset.resolveNote, operatorName);
+    });
+  });
+}
+
+function renderServiceManualScreen() {
+  const manuals = getActiveServiceManuals();
+  const categories = getServiceManualCategories(manuals);
+  if (state.manualCategory !== "all" && !categories.includes(state.manualCategory)) {
+    state.manualCategory = "all";
+  }
+  const filteredManuals = getFilteredServiceManuals();
+  if (!state.selectedManualId || !filteredManuals.some((manual) => manual.id === state.selectedManualId)) {
+    state.selectedManualId = filteredManuals[0]?.id || null;
+  }
+  const selectedManual = getServiceManual(state.selectedManualId);
+  const pinnedManuals = filteredManuals.filter((manual) => manual.isPinned);
+
+  els.workArea.innerHTML = `
+    <section class="manual-screen" aria-label="응대 메뉴얼">
+      <div class="panel-header">
+        <h2>응대 메뉴얼</h2>
+        <p>손님 질문이나 상황에 맞는 답변 문구를 빠르게 확인합니다.</p>
+      </div>
+      <div class="manual-layout">
+        <aside class="manual-browser">
+          <label class="field manual-search-field">
+            <span>검색</span>
+            <input id="manualSearch" type="search" value="${escapeAttr(state.manualSearchQuery)}" placeholder="예: 포장, 영수증, 대기" autocomplete="off" />
+          </label>
+          <div class="manual-category-row" aria-label="응대 카테고리">
+            <button class="manual-category-button ${state.manualCategory === "all" ? "is-active" : ""}" type="button" data-manual-category="all">전체</button>
+            ${categories
+              .map(
+                (category) => `
+                  <button class="manual-category-button ${state.manualCategory === category ? "is-active" : ""}" type="button" data-manual-category="${escapeAttr(category)}">
+                    ${escapeHtml(category)}
+                  </button>
+                `,
+              )
+              .join("")}
+          </div>
+          ${
+            pinnedManuals.length
+              ? `<div class="manual-pinned">
+                  <span>중요</span>
+                  ${pinnedManuals
+                    .map(
+                      (manual) => `
+                        <button class="manual-quick-button ${manual.id === selectedManual?.id ? "is-active" : ""}" type="button" data-select-manual="${manual.id}">
+                          ${escapeHtml(manual.title)}
+                        </button>
+                      `,
+                    )
+                    .join("")}
+                </div>`
+              : ""
+          }
+          <div class="manual-list">
+            ${
+              filteredManuals.length
+                ? filteredManuals
+                    .map(
+                      (manual) => `
+                        <button class="manual-list-button ${manual.id === selectedManual?.id ? "is-active" : ""}" type="button" data-select-manual="${manual.id}">
+                          <strong>${escapeHtml(manual.title)}</strong>
+                          <span>${escapeHtml(manual.category)}</span>
+                          <small>${escapeHtml(getManualPreviewText(manual))}</small>
+                        </button>
+                      `,
+                    )
+                    .join("")
+                : `<div class="empty-state">표시할 응대 메뉴얼이 없습니다.</div>`
+            }
+          </div>
+        </aside>
+        <article class="manual-detail">
+          ${
+            selectedManual
+              ? `
+                <div class="manual-detail-heading">
+                  <span class="badge">${escapeHtml(selectedManual.category)}</span>
+                  ${selectedManual.isPinned ? `<span class="badge badge--ok">중요</span>` : ""}
+                  <h3>${escapeHtml(selectedManual.title)}</h3>
+                </div>
+                ${
+                  selectedManual.situation
+                    ? `<section class="manual-detail-section">
+                        <span>손님 질문 / 상황</span>
+                        <p>${escapeHtml(selectedManual.situation)}</p>
+                      </section>`
+                    : ""
+                }
+                <section class="manual-response-card">
+                  <span>이렇게 말하기</span>
+                  <p>${escapeHtml(selectedManual.response || "관리자 화면에서 답변 문구를 입력해주세요.")}</p>
+                </section>
+                ${
+                  selectedManual.caution
+                    ? `<section class="manual-detail-section">
+                        <span>주의사항</span>
+                        <p>${escapeHtml(selectedManual.caution)}</p>
+                      </section>`
+                    : ""
+                }
+                ${
+                  selectedManual.keywords
+                    ? `<div class="manual-keywords">${selectedManual.keywords
+                        .split(",")
+                        .map((keyword) => keyword.trim())
+                        .filter(Boolean)
+                        .map((keyword) => `<span>${escapeHtml(keyword)}</span>`)
+                        .join("")}</div>`
+                    : ""
+                }
+              `
+              : `<div class="empty-state">왼쪽에서 응대 항목을 선택해주세요.</div>`
+          }
+        </article>
+      </div>
+    </section>
+  `;
+
+  const searchInput = els.workArea.querySelector("#manualSearch");
+  searchInput?.addEventListener("input", () => {
+    state.manualSearchQuery = searchInput.value;
+    state.selectedManualId = null;
+    renderServiceManualScreen();
+    requestAnimationFrame(() => {
+      const nextInput = els.workArea.querySelector("#manualSearch");
+      nextInput?.focus();
+      nextInput?.setSelectionRange(state.manualSearchQuery.length, state.manualSearchQuery.length);
+    });
+  });
+  els.workArea.querySelectorAll("[data-manual-category]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.manualCategory = button.dataset.manualCategory || "all";
+      state.selectedManualId = null;
+      renderServiceManualScreen();
+    });
+  });
+  els.workArea.querySelectorAll("[data-select-manual]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedManualId = button.dataset.selectManual;
+      renderServiceManualScreen();
     });
   });
 }
@@ -3210,6 +3504,7 @@ function renderAdminScreen() {
   const menuLabels = [
     ["summary", "오늘 요약"],
     ["operationChecks", "운영 체크 관리"],
+    ["serviceManuals", "응대 메뉴얼 관리"],
     ["recipes", "레시피 관리"],
     ["supplies", "소모품/발주량 관리"],
     ["adjust", "입고/재고 조정"],
@@ -3256,6 +3551,7 @@ function renderAdminScreen() {
   const body = els.workArea.querySelector("#adminBody");
   if (state.adminMenu === "summary") renderManagerSummaryAdmin(body);
   if (state.adminMenu === "operationChecks") renderOperationChecksAdmin(body);
+  if (state.adminMenu === "serviceManuals") renderServiceManualsAdmin(body);
   if (state.adminMenu === "recipes") renderRecipeAdmin(body);
   if (state.adminMenu === "supplies") renderSuppliesAdmin(body);
   if (state.adminMenu === "adjust") renderAdjustAdmin(body);
@@ -3420,6 +3716,255 @@ function renderManagerSummaryAdmin(container) {
       </section>
     </div>
   `;
+}
+
+function renderServiceManualsAdmin(container) {
+  const manuals = getServiceManualsForAdmin();
+  if (!state.selectedAdminManualId || !getServiceManual(state.selectedAdminManualId)) {
+    state.selectedAdminManualId = manuals[0]?.id || null;
+  }
+  const manual = getServiceManual(state.selectedAdminManualId);
+  const categories = getServiceManualCategories(manuals);
+
+  container.innerHTML = `
+    <div class="service-manual-admin">
+      <section class="manual-admin-list-panel">
+        <div class="alarm-panel-heading">
+          <h3>응대 항목</h3>
+          <button class="button button--ghost button--small" id="addServiceManual" type="button">추가</button>
+        </div>
+        <div class="manual-admin-category-summary">
+          ${categories.length ? categories.map((category) => `<span>${escapeHtml(category)}</span>`).join("") : `<span>카테고리 없음</span>`}
+        </div>
+        <div class="list-stack manual-admin-list-stack">
+          ${
+            manuals.length
+              ? manuals
+                  .map(
+                    (item) => `
+                      <button class="list-button list-button--draggable manual-admin-list-button ${item.id === manual?.id ? "is-active" : ""} ${item.isActive ? "" : "is-inactive"}" type="button" draggable="true" data-select-service-manual="${item.id}" data-service-manual-drag="${item.id}" title="드래그해서 순서 변경">
+                        <strong>${escapeHtml(item.title)}</strong>
+                        <span>${escapeHtml(item.category)}${item.isPinned ? " · 중요" : ""}${item.isActive ? "" : " · 숨김"}</span>
+                      </button>
+                    `,
+                  )
+                  .join("")
+              : `<div class="empty-state">등록된 응대 메뉴얼이 없습니다.</div>`
+          }
+        </div>
+      </section>
+      <section class="manual-admin-editor-panel">
+        ${
+          manual
+            ? `
+              <div class="manual-admin-editor">
+                <div class="alarm-panel-heading">
+                  <h3>응대 내용 편집</h3>
+                  ${state.savedMessage ? `<span class="saved-note">${escapeHtml(state.savedMessage)}</span>` : ""}
+                </div>
+                <div class="manual-admin-grid">
+                  <label class="field">
+                    <span>제목</span>
+                    <input id="serviceManualTitle" type="text" value="${escapeAttr(manual.title)}" placeholder="예: 포장 가능 여부" />
+                  </label>
+                  <label class="field">
+                    <span>카테고리</span>
+                    <input id="serviceManualCategory" type="text" value="${escapeAttr(manual.category)}" list="serviceManualCategoryOptions" placeholder="예: 포장/배달" />
+                    <datalist id="serviceManualCategoryOptions">
+                      ${categories.map((category) => `<option value="${escapeAttr(category)}"></option>`).join("")}
+                    </datalist>
+                  </label>
+                </div>
+                <label class="field">
+                  <span>손님 질문 / 상황</span>
+                  <textarea id="serviceManualSituation" placeholder="예: 손님이 포장 가능한지 물어볼 때">${escapeHtml(manual.situation)}</textarea>
+                </label>
+                <label class="field manual-response-field">
+                  <span>직원이 말할 답변 문구</span>
+                  <textarea id="serviceManualResponse" placeholder="직원이 그대로 말할 수 있는 문장을 입력해주세요.">${escapeHtml(manual.response)}</textarea>
+                </label>
+                <label class="field">
+                  <span>주의사항</span>
+                  <textarea id="serviceManualCaution" placeholder="실수하기 쉬운 부분이나 매니저 호출 기준을 입력해주세요.">${escapeHtml(manual.caution)}</textarea>
+                </label>
+                <label class="field">
+                  <span>검색 키워드</span>
+                  <input id="serviceManualKeywords" type="text" value="${escapeAttr(manual.keywords)}" placeholder="예: 포장, 테이크아웃, 아이스크림" />
+                </label>
+                <div class="manual-admin-options">
+                  <label class="check-field">
+                    <input id="serviceManualActive" type="checkbox" ${manual.isActive ? "checked" : ""} />
+                    직원 화면에 표시
+                  </label>
+                  <label class="check-field">
+                    <input id="serviceManualPinned" type="checkbox" ${manual.isPinned ? "checked" : ""} />
+                    중요 항목으로 고정
+                  </label>
+                </div>
+                <div class="alarm-action-row">
+                  <button class="button button--danger" id="deleteServiceManual" type="button">삭제</button>
+                  <button class="button button--primary" id="saveServiceManual" type="button">저장</button>
+                </div>
+              </div>
+            `
+            : `<div class="empty-state">응대 메뉴얼을 추가해주세요.</div>`
+        }
+      </section>
+    </div>
+  `;
+
+  container.querySelectorAll("[data-select-service-manual]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedAdminManualId = button.dataset.selectServiceManual;
+      state.savedMessage = "";
+      renderAdminScreen();
+    });
+  });
+  setupServiceManualDragSorting(container);
+  container.querySelector("#addServiceManual")?.addEventListener("click", () => addServiceManual(container));
+  container.querySelector("#saveServiceManual")?.addEventListener("click", () => saveServiceManualAdmin(container));
+  container.querySelector("#deleteServiceManual")?.addEventListener("click", deleteServiceManualAdmin);
+}
+
+function applyServiceManualAdminValues(container) {
+  const manual = getServiceManual(state.selectedAdminManualId);
+  if (!manual) return true;
+  const titleInput = container.querySelector("#serviceManualTitle");
+  const title = titleInput?.value.trim() || "";
+  if (!title) {
+    titleInput?.focus();
+    return false;
+  }
+  manual.title = title;
+  manual.category = container.querySelector("#serviceManualCategory")?.value.trim() || "기본 응대";
+  manual.situation = container.querySelector("#serviceManualSituation")?.value.trim() || "";
+  manual.response = container.querySelector("#serviceManualResponse")?.value.trim() || "";
+  manual.caution = container.querySelector("#serviceManualCaution")?.value.trim() || "";
+  manual.keywords = container.querySelector("#serviceManualKeywords")?.value.trim() || "";
+  manual.isActive = Boolean(container.querySelector("#serviceManualActive")?.checked);
+  manual.isPinned = Boolean(container.querySelector("#serviceManualPinned")?.checked);
+  manual.updatedAt = nowIso();
+  return true;
+}
+
+function addServiceManual(container) {
+  if (!applyServiceManualAdminValues(container)) return;
+  const createdAt = nowIso();
+  const manual = normalizeServiceManual(
+    {
+      id: uid("service_manual"),
+      category: "기본 응대",
+      title: "새 응대 메뉴얼",
+      situation: "",
+      response: "",
+      caution: "",
+      keywords: "",
+      isPinned: false,
+      isActive: true,
+      sortOrder: getServiceManualsForAdmin().length + 1,
+      createdAt,
+      updatedAt: createdAt,
+    },
+    getServiceManualsForAdmin().length,
+  );
+  db.operations.serviceManuals.push(manual);
+  state.selectedAdminManualId = manual.id;
+  state.savedMessage = "응대 메뉴얼을 추가했습니다.";
+  saveDb();
+  renderAdminScreen();
+}
+
+function saveServiceManualAdmin(container) {
+  if (!applyServiceManualAdminValues(container)) return;
+  getServiceManualsForAdmin().forEach((manual, index) => {
+    manual.sortOrder = index + 1;
+  });
+  state.savedMessage = "응대 메뉴얼 저장 완료";
+  saveDb();
+  renderAdminScreen();
+}
+
+function deleteServiceManualAdmin() {
+  const manual = getServiceManual(state.selectedAdminManualId);
+  if (!manual) return;
+  if (!confirm(`${manual.title} 응대 메뉴얼을 삭제할까요?`)) return;
+  db.operations.serviceManuals = getServiceManualsForAdmin().filter((item) => item.id !== manual.id);
+  getServiceManualsForAdmin().forEach((item, index) => {
+    item.sortOrder = index + 1;
+    item.updatedAt = nowIso();
+  });
+  if (state.selectedManualId === manual.id) state.selectedManualId = null;
+  state.selectedAdminManualId = getServiceManualsForAdmin()[0]?.id || null;
+  state.savedMessage = `${manual.title} 메뉴얼을 삭제했습니다.`;
+  saveDb();
+  renderAdminScreen();
+}
+
+function setupServiceManualDragSorting(container) {
+  let draggedManualId = "";
+  container.querySelectorAll("[data-service-manual-drag]").forEach((button) => {
+    button.addEventListener("dragstart", (event) => {
+      draggedManualId = button.dataset.serviceManualDrag;
+      button.classList.add("is-dragging");
+      if (event.dataTransfer) {
+        const dragImage = document.createElement("canvas");
+        dragImage.width = 1;
+        dragImage.height = 1;
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", draggedManualId);
+        event.dataTransfer.setDragImage(dragImage, 0, 0);
+      }
+    });
+    button.addEventListener("dragend", () => {
+      draggedManualId = "";
+      clearServiceManualDropMarkers(container);
+    });
+    button.addEventListener("dragover", (event) => {
+      if (!draggedManualId || draggedManualId === button.dataset.serviceManualDrag) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+      const position = getVerticalDropPosition(event, button);
+      clearServiceManualDropMarkers(container);
+      button.classList.add(position === "after" ? "is-drop-after" : "is-drop-before");
+    });
+    button.addEventListener("dragleave", () => {
+      button.classList.remove("is-drop-before", "is-drop-after");
+    });
+    button.addEventListener("drop", (event) => {
+      event.preventDefault();
+      const sourceId = event.dataTransfer?.getData("text/plain") || draggedManualId;
+      const position = getVerticalDropPosition(event, button);
+      moveServiceManual(sourceId, button.dataset.serviceManualDrag, position);
+    });
+  });
+}
+
+function clearServiceManualDropMarkers(container) {
+  container.querySelectorAll(".is-dragging, .is-drop-before, .is-drop-after").forEach((item) => {
+    item.classList.remove("is-dragging", "is-drop-before", "is-drop-after");
+  });
+}
+
+function moveServiceManual(sourceManualId, targetManualId, position = "before") {
+  if (!sourceManualId || !targetManualId || sourceManualId === targetManualId) return;
+  const ordered = getServiceManualsForAdmin();
+  const sourceIndex = ordered.findIndex((manual) => manual.id === sourceManualId);
+  const targetIndex = ordered.findIndex((manual) => manual.id === targetManualId);
+  if (sourceIndex < 0 || targetIndex < 0) return;
+
+  const [movedManual] = ordered.splice(sourceIndex, 1);
+  const nextTargetIndex = ordered.findIndex((manual) => manual.id === targetManualId);
+  ordered.splice(position === "after" ? nextTargetIndex + 1 : nextTargetIndex, 0, movedManual);
+  const updatedAt = nowIso();
+  ordered.forEach((manual, index) => {
+    manual.sortOrder = index + 1;
+    manual.updatedAt = updatedAt;
+  });
+  db.operations.serviceManuals = ordered;
+  state.selectedAdminManualId = movedManual.id;
+  state.savedMessage = "응대 메뉴얼 순서를 저장했습니다.";
+  saveDb();
+  renderAdminScreen();
 }
 
 function renderOperationChecksAdmin(container) {
