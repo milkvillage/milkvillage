@@ -3694,13 +3694,27 @@ function renderServiceManualsAdmin(container) {
                   <h3>응대 내용 편집</h3>
                   ${state.savedMessage ? `<span class="saved-note">${escapeHtml(state.savedMessage)}</span>` : ""}
                 </div>
-                <label class="field">
+                <div class="field manual-category-field">
                   <span>카테고리</span>
-                  <input id="serviceManualCategory" type="text" value="${escapeAttr(manual.category)}" list="serviceManualCategoryOptions" placeholder="예: 인사" autocomplete="off" />
-                  <datalist id="serviceManualCategoryOptions">
-                    ${categories.map((category) => `<option value="${escapeAttr(category)}"></option>`).join("")}
-                  </datalist>
-                </label>
+                  <div class="manual-category-picker-wrap">
+                    <input id="serviceManualCategory" type="text" value="${escapeAttr(manual.category)}" placeholder="예: 인사" autocomplete="off" aria-haspopup="listbox" aria-expanded="false" />
+                    <div class="manual-category-picker" id="serviceManualCategoryPicker" role="listbox" hidden>
+                      ${
+                        categories.length
+                          ? categories
+                              .map(
+                                (category) => `
+                                  <button class="manual-category-choice ${category === manual.category ? "is-active" : ""}" type="button" data-service-category-choice="${escapeAttr(category)}" role="option">
+                                    ${escapeHtml(category)}
+                                  </button>
+                                `,
+                              )
+                              .join("")
+                          : `<div class="manual-category-picker-empty">저장된 카테고리 없음</div>`
+                      }
+                    </div>
+                  </div>
+                </div>
                 <label class="field">
                   <span>상황</span>
                   <textarea id="serviceManualSituation" placeholder="예: 손님이 매장에 들어왔을 때">${escapeHtml(manual.situation)}</textarea>
@@ -3737,14 +3751,35 @@ function renderServiceManualsAdmin(container) {
 
 function setupServiceManualCategoryPicker(container) {
   const categoryInput = container.querySelector("#serviceManualCategory");
+  const categoryPicker = container.querySelector("#serviceManualCategoryPicker");
   if (!categoryInput) return;
-  const openCategoryPicker = () => {
-    try {
-      categoryInput.showPicker?.();
-    } catch {}
+  const setPickerOpen = (isOpen) => {
+    if (!categoryPicker) return;
+    categoryPicker.hidden = !isOpen;
+    categoryInput.setAttribute("aria-expanded", isOpen ? "true" : "false");
   };
+  const openCategoryPicker = () => setPickerOpen(true);
   categoryInput.addEventListener("focus", openCategoryPicker);
   categoryInput.addEventListener("click", openCategoryPicker);
+  categoryInput.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") setPickerOpen(false);
+    if (event.key === "ArrowDown") openCategoryPicker();
+  });
+  categoryPicker?.querySelectorAll("[data-service-category-choice]").forEach((button) => {
+    button.addEventListener("click", () => {
+      categoryInput.value = button.dataset.serviceCategoryChoice || "";
+      setPickerOpen(false);
+      categoryInput.focus();
+    });
+  });
+  const closeOnOutsideClick = (event) => {
+    if (!categoryPicker || categoryPicker.hidden) return;
+    if (event.target === categoryInput || categoryPicker.contains(event.target)) return;
+    setPickerOpen(false);
+    document.removeEventListener("pointerdown", closeOnOutsideClick);
+  };
+  categoryInput.addEventListener("focus", () => document.addEventListener("pointerdown", closeOnOutsideClick));
+  categoryInput.addEventListener("click", () => document.addEventListener("pointerdown", closeOnOutsideClick));
 }
 
 function applyServiceManualAdminValues(container) {
