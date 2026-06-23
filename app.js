@@ -3,6 +3,10 @@ const SUPABASE_URL = "https://irfalbrkahcouaugbqwj.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_KLXkL3WkYQXTTUsdE9WZJw_Vw63SWtM";
 const REMOTE_TABLE = "milk_village_state";
 const REMOTE_STATE_ID = "main";
+const ENABLE_REALTIME_SYNC = false;
+const REMOTE_POLL_INTERVAL_MS = 15 * 1000;
+const REMOTE_POLL_HIDDEN_INTERVAL_MS = 2 * 60 * 1000;
+const REMOTE_SAVE_DEBOUNCE_MS = 2000;
 const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const alarmDayOrder = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 const alarmDayLabels = {
@@ -946,6 +950,24 @@ async function fetchRemoteState({ force = false, source = "poll" } = {}) {
   return true;
 }
 
+async function fetchRemoteMeta() {
+  if (!supabaseClient) return null;
+  const { data, error } = await supabaseClient.from(REMOTE_TABLE).select("updated_at").eq("id", REMOTE_STATE_ID).maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+async function fetchRemoteStateIfChanged({ force = false, source = "poll" } = {}) {
+  if (!supabaseClient) return false;
+  if (force || !lastRemoteUpdatedAt) return fetchRemoteState({ force, source });
+
+  const meta = await fetchRemoteMeta();
+  if (!meta?.updated_at) return false;
+  if (!isIsoAfter(meta.updated_at, lastRemoteUpdatedAt)) return false;
+
+  return fetchRemoteState({ force, source });
+}
+
 function syncRemoteBeforeAlarmCheck(source = "resume") {
   if (!supabaseClient) {
     checkAlarms();
@@ -954,7 +976,7 @@ function syncRemoteBeforeAlarmCheck(source = "resume") {
   if (remoteResumeSyncPromise) return remoteResumeSyncPromise;
 
   remoteResumeSyncInFlight = true;
-  remoteResumeSyncPromise = fetchRemoteState({ source })
+  remoteResumeSyncPromise = fetchRemoteStateIfChanged({ source })
     .catch((error) => {
       console.error(error);
       setRemoteStatus("DB 동기화 지연", "error");
@@ -1010,7 +1032,7 @@ function syncSelectedIds() {
 }
 
 function subscribeRemoteChanges() {
-  if (!supabaseClient || remoteChannel) return;
+  if (!ENABLE_REALTIME_SYNC || !supabaseClient || remoteChannel) return;
   remoteChannel = supabaseClient
     .channel("milk-village-state-sync")
     .on(
@@ -1033,18 +1055,21 @@ function subscribeRemoteChanges() {
 
 function startRemotePolling() {
   if (!supabaseClient || remotePollTimer) return;
-  remotePollTimer = window.setInterval(() => {
-    fetchRemoteState({ source: "poll" }).catch((error) => {
+  const poll = () => {
+    fetchRemoteStateIfChanged({ source: "poll" }).catch((error) => {
       console.error(error);
       setRemoteStatus("DB 동기화 지연", "error");
+    }).finally(() => {
+      remotePollTimer = window.setTimeout(poll, document.hidden ? REMOTE_POLL_HIDDEN_INTERVAL_MS : REMOTE_POLL_INTERVAL_MS);
     });
-  }, 10000);
+  };
+  remotePollTimer = window.setTimeout(poll, REMOTE_POLL_INTERVAL_MS);
 }
 
 function queueRemoteSave() {
   if (!supabaseClient || applyingRemoteState) return;
   window.clearTimeout(remoteSaveTimer);
-  remoteSaveTimer = window.setTimeout(saveRemoteNow, 350);
+  remoteSaveTimer = window.setTimeout(saveRemoteNow, REMOTE_SAVE_DEBOUNCE_MS);
 }
 
 async function saveRemoteNow() {
@@ -1054,9 +1079,9 @@ async function saveRemoteNow() {
   const dataToSave = normalizeDb(db);
   const localUpdatedAt = dataToSave.meta?.updatedAt || localRevisionAt || nowIso();
 
-  const { data: remoteRow, error: fetchError } = await supabaseClient
+  const { data: remoteMeta, error: fetchError } = await supabaseClient
     .from(REMOTE_TABLE)
-    .select("data, updated_at")
+    .select("updated_at")
     .eq("id", REMOTE_STATE_ID)
     .maybeSingle();
   if (fetchError) {
@@ -1068,13 +1093,28 @@ async function saveRemoteNow() {
     queueRemoteSave();
     return;
   }
-  if (remoteRow?.data && remoteRow.updated_at) {
-    const remoteIsNewerThanLastSync = !lastRemoteUpdatedAt || new Date(remoteRow.updated_at) > new Date(lastRemoteUpdatedAt);
-    const remoteIsNewerThanLocal = new Date(remoteRow.updated_at) > new Date(localUpdatedAt);
-    if (remoteIsNewerThanLastSync) mergeRemoteAlarmEvents(dataToSave, normalizeDb(remoteRow.data));
-    if (remoteIsNewerThanLastSync && remoteIsNewerThanLocal) {
-      applyRemoteState(remoteRow, { force: true, source: "save" });
-      return;
+
+  if (remoteMeta?.updated_at) {
+    const remoteIsNewerThanLastSync = !lastRemoteUpdatedAt || isIsoAfter(remoteMeta.updated_at, lastRemoteUpdatedAt);
+    const remoteIsNewerThanLocal = isIsoAfter(remoteMeta.updated_at, localUpdatedAt);
+    if (remoteIsNewerThanLastSync || remoteIsNewerThanLocal) {
+      const { data: remoteRow, error: remoteDataError } = await supabaseClient
+        .from(REMOTE_TABLE)
+        .select("data, updated_at")
+        .eq("id", REMOTE_STATE_ID)
+        .maybeSingle();
+      if (remoteDataError) {
+        console.error(remoteDataError);
+        setRemoteStatus("DB 저장 실패", "error");
+        return;
+      }
+      if (remoteRow?.data && remoteRow.updated_at) {
+        if (remoteIsNewerThanLastSync) mergeRemoteAlarmEvents(dataToSave, normalizeDb(remoteRow.data));
+        if (remoteIsNewerThanLastSync && remoteIsNewerThanLocal) {
+          applyRemoteState(remoteRow, { force: true, source: "save" });
+          return;
+        }
+      }
     }
   }
 
