@@ -18,6 +18,7 @@ const els = {
   loginButton: document.querySelector("#loginButton"),
   lockButton: document.querySelector("#lockButton"),
   connectionStatus: document.querySelector("#connectionStatus"),
+  samplePrintButton: document.querySelector("#samplePrintButton"),
   payrollMonth: document.querySelector("#payrollMonth"),
   refreshButton: document.querySelector("#refreshButton"),
   printAllButton: document.querySelector("#printAllButton"),
@@ -411,6 +412,65 @@ function printPayslips(staffIds) {
   requestAnimationFrame(() => window.print());
 }
 
+function printSamplePayslip() {
+  const samplePayroll = {
+    staff: { id: "sample-staff", name: "김대완" },
+    setting: { withholding: true },
+    hourlyRate: 12000,
+    records: [
+      {
+        date: `${state.selectedMonth}-03`,
+        status: "present",
+        actualStart: "10:00",
+        actualEnd: "18:30",
+        breakMinutes: 60,
+        employeeSignature: "sample",
+        managerSignature: "sample",
+      },
+      {
+        date: `${state.selectedMonth}-04`,
+        status: "present",
+        actualStart: "12:00",
+        actualEnd: "21:00",
+        breakMinutes: 60,
+        employeeSignature: "sample",
+        managerSignature: "sample",
+      },
+      {
+        date: `${state.selectedMonth}-10`,
+        status: "absent",
+        actualStart: "",
+        actualEnd: "",
+        breakMinutes: 0,
+        employeeSignature: "sample",
+        managerSignature: "",
+      },
+    ],
+    presentRecords: [],
+    absentRecords: [],
+    workMinutes: 0,
+    breakMinutes: 0,
+    weeklyAllowanceMinutes: 8 * 60,
+    basePay: 0,
+    weeklyAllowancePay: 96000,
+    grossPay: 0,
+    withholdingAmount: 0,
+    netPay: 0,
+    unconfirmedCount: 0,
+  };
+  samplePayroll.presentRecords = samplePayroll.records.filter((record) => record.status === "present");
+  samplePayroll.absentRecords = samplePayroll.records.filter((record) => record.status === "absent");
+  samplePayroll.workMinutes = samplePayroll.presentRecords.reduce((sum, record) => sum + getRecordWorkMinutes(record), 0);
+  samplePayroll.breakMinutes = samplePayroll.presentRecords.reduce((sum, record) => sum + normalizeBreakMinutes(record.breakMinutes), 0);
+  samplePayroll.basePay = Math.round((samplePayroll.workMinutes / 60) * samplePayroll.hourlyRate);
+  samplePayroll.grossPay = samplePayroll.basePay + samplePayroll.weeklyAllowancePay;
+  samplePayroll.withholdingAmount = Math.floor(samplePayroll.grossPay * WITHHOLDING_RATE);
+  samplePayroll.netPay = samplePayroll.grossPay - samplePayroll.withholdingAmount;
+
+  els.printArea.innerHTML = renderPayslip(samplePayroll);
+  requestAnimationFrame(() => window.print());
+}
+
 function renderPayslip(payroll) {
   return `
     <article class="payslip">
@@ -589,6 +649,7 @@ els.loginPin.addEventListener("keydown", (event) => {
   if (event.key === "Enter") login();
 });
 els.lockButton.addEventListener("click", lock);
+els.samplePrintButton.addEventListener("click", printSamplePayslip);
 els.refreshButton.addEventListener("click", fetchRemoteState);
 els.printAllButton.addEventListener("click", () => printPayslips(state.staffMembers.map((staff) => staff.id)));
 els.payrollMonth.addEventListener("change", render);

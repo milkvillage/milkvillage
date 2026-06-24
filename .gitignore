@@ -2,3 +2,4 @@
 *.log
 scripts/.alarm-sound-sync-state.json
 scripts/.attendance-backup-state.json
+output/
