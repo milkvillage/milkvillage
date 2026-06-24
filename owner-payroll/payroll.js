@@ -19,9 +19,11 @@ const els = {
   lockButton: document.querySelector("#lockButton"),
   connectionStatus: document.querySelector("#connectionStatus"),
   samplePrintButton: document.querySelector("#samplePrintButton"),
+  sampleAttendancePrintButton: document.querySelector("#sampleAttendancePrintButton"),
   payrollMonth: document.querySelector("#payrollMonth"),
   refreshButton: document.querySelector("#refreshButton"),
   printAllButton: document.querySelector("#printAllButton"),
+  printAllAttendanceButton: document.querySelector("#printAllAttendanceButton"),
   remoteUpdatedText: document.querySelector("#remoteUpdatedText"),
   staffRateList: document.querySelector("#staffRateList"),
   summaryGrid: document.querySelector("#summaryGrid"),
@@ -331,7 +333,8 @@ function renderPayrollList(payrolls) {
           ${payroll.hourlyRate && payroll.hourlyRate < MINIMUM_HOURLY_WAGE_2026 ? `<p class="notice">시급이 2026년 최저임금 ${formatWon(MINIMUM_HOURLY_WAGE_2026)}보다 낮습니다.</p>` : ""}
           ${payroll.unconfirmedCount ? `<p class="notice">매니저 서명이 없는 근퇴기록이 포함되어 있습니다.</p>` : ""}
           <div class="button-row">
-            <button class="button button--primary button--small" type="button" data-print-staff="${escapeAttr(payroll.staff.id)}">PDF 출력</button>
+            <button class="button button--primary button--small" type="button" data-print-staff="${escapeAttr(payroll.staff.id)}">급여 PDF</button>
+            <button class="button button--ghost button--small" type="button" data-print-attendance="${escapeAttr(payroll.staff.id)}">근퇴 PDF</button>
           </div>
         </article>
       `,
@@ -340,6 +343,9 @@ function renderPayrollList(payrolls) {
 
   els.payrollList.querySelectorAll("[data-print-staff]").forEach((button) => {
     button.addEventListener("click", () => printPayslips([button.dataset.printStaff]));
+  });
+  els.payrollList.querySelectorAll("[data-print-attendance]").forEach((button) => {
+    button.addEventListener("click", () => printAttendanceSheets([button.dataset.printAttendance]));
   });
 }
 
@@ -412,7 +418,28 @@ function printPayslips(staffIds) {
   requestAnimationFrame(() => window.print());
 }
 
+function printAttendanceSheets(staffIds) {
+  const payrolls = calculatePayrolls().filter((payroll) => staffIds.includes(payroll.staff.id));
+  if (!payrolls.length) {
+    alert("출력할 근퇴기록 확인서가 없습니다.");
+    return;
+  }
+  els.printArea.innerHTML = payrolls.map(renderAttendanceSheet).join("");
+  requestAnimationFrame(() => window.print());
+}
+
 function printSamplePayslip() {
+  const samplePayroll = makeSamplePayroll();
+  els.printArea.innerHTML = renderPayslip(samplePayroll);
+  requestAnimationFrame(() => window.print());
+}
+
+function printSampleAttendanceSheet() {
+  els.printArea.innerHTML = renderAttendanceSheet(makeSamplePayroll());
+  requestAnimationFrame(() => window.print());
+}
+
+function makeSamplePayroll() {
   const samplePayroll = {
     staff: { id: "sample-staff", name: "김대완" },
     setting: { withholding: true },
@@ -426,6 +453,7 @@ function printSamplePayslip() {
         breakMinutes: 60,
         employeeSignature: "sample",
         managerSignature: "sample",
+        adjustmentReason: "",
       },
       {
         date: `${state.selectedMonth}-04`,
@@ -435,6 +463,7 @@ function printSamplePayslip() {
         breakMinutes: 60,
         employeeSignature: "sample",
         managerSignature: "sample",
+        adjustmentReason: "피크타임 연장",
       },
       {
         date: `${state.selectedMonth}-10`,
@@ -444,6 +473,7 @@ function printSamplePayslip() {
         breakMinutes: 0,
         employeeSignature: "sample",
         managerSignature: "",
+        adjustmentReason: "개인 사정",
       },
     ],
     presentRecords: [],
@@ -466,9 +496,7 @@ function printSamplePayslip() {
   samplePayroll.grossPay = samplePayroll.basePay + samplePayroll.weeklyAllowancePay;
   samplePayroll.withholdingAmount = Math.floor(samplePayroll.grossPay * WITHHOLDING_RATE);
   samplePayroll.netPay = samplePayroll.grossPay - samplePayroll.withholdingAmount;
-
-  els.printArea.innerHTML = renderPayslip(samplePayroll);
-  requestAnimationFrame(() => window.print());
+  return samplePayroll;
 }
 
 function renderPayslip(payroll) {
@@ -531,6 +559,82 @@ function renderPayslip(payroll) {
       </table>
       <p>주휴수당은 월 내 근퇴기록 기준의 예상 계산이며, 실제 지급 전 법정 요건을 확인해주세요.</p>
     </article>
+  `;
+}
+
+function renderAttendanceSheet(payroll) {
+  return `
+    <article class="payslip attendance-sheet">
+      <header class="payslip-header">
+        <div>
+          <div class="payslip-title">근퇴기록 확인서</div>
+          <p>Milk Village</p>
+        </div>
+        <div>
+          <p><strong>확인월</strong> ${formatMonthLabel(state.selectedMonth)}</p>
+          <p><strong>발행일</strong> ${formatDateKey(new Date())}</p>
+        </div>
+      </header>
+
+      <section class="attendance-print-summary">
+        <div><span>근무자</span><strong>${escapeHtml(payroll.staff.name)}</strong></div>
+        <div><span>출근일</span><strong>${payroll.presentRecords.length}일</strong></div>
+        <div><span>결근</span><strong>${payroll.absentRecords.length}건</strong></div>
+        <div><span>총 근무시간</span><strong>${formatDurationText(payroll.workMinutes)}</strong></div>
+        <div><span>총 휴게시간</span><strong>${formatDurationText(payroll.breakMinutes)}</strong></div>
+        <div><span>확인 대기</span><strong>${payroll.unconfirmedCount}건</strong></div>
+      </section>
+
+      <div class="attendance-confirm-note">
+        <strong>직원 확인용</strong>
+        <span>아래 출퇴근 기록이 실제 근무와 다르면 대표에게 수정사항을 알려주세요.</span>
+      </div>
+
+      <table class="payslip-table attendance-print-table">
+        <thead>
+          <tr>
+            <th>날짜</th>
+            <th>구분</th>
+            <th>출근</th>
+            <th>퇴근</th>
+            <th>휴게</th>
+            <th>인정 근무</th>
+            <th>확인</th>
+            <th>비고</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${
+            payroll.records.length
+              ? payroll.records.map(renderAttendanceSheetRow).join("")
+              : `<tr><td colspan="8">해당 월 근퇴기록 없음</td></tr>`
+          }
+        </tbody>
+      </table>
+
+      <section class="attendance-reply-box">
+        <div>□ 위 기록이 맞습니다.</div>
+        <div>□ 수정이 필요합니다. 수정 날짜/내용: ________________________________</div>
+      </section>
+    </article>
+  `;
+}
+
+function renderAttendanceSheetRow(record) {
+  const isPresent = record.status === "present";
+  const confirmText = record.employeeSignature && record.managerSignature ? "완료" : "대기";
+  const note = record.adjustmentReason || (confirmText === "대기" && isPresent ? "매니저 확인 필요" : "");
+  return `
+    <tr class="${isPresent ? "" : "is-absent-row"}">
+      <td>${escapeHtml(formatAttendanceDateLabel(record.date))}</td>
+      <td>${isPresent ? "출근" : "결근"}</td>
+      <td>${isPresent ? escapeHtml(record.actualStart || "--:--") : "-"}</td>
+      <td>${isPresent ? escapeHtml(record.actualEnd || "--:--") : "-"}</td>
+      <td>${formatBreakDuration(record.breakMinutes)}</td>
+      <td>${isPresent ? formatDurationText(getRecordWorkMinutes(record)) : "0분"}</td>
+      <td>${confirmText}</td>
+      <td>${escapeHtml(note)}</td>
+    </tr>
   `;
 }
 
@@ -613,6 +717,13 @@ function formatMonthLabel(monthKey) {
   return `${year}년 ${month}월`;
 }
 
+function formatAttendanceDateLabel(dateKey) {
+  const date = parseDateKey(dateKey);
+  if (!date) return dateKey || "";
+  const weekdays = ["일", "월", "화", "수", "목", "금", "토"];
+  return `${String(date.getMonth() + 1).padStart(2, "0")}.${String(date.getDate()).padStart(2, "0")} (${weekdays[date.getDay()]})`;
+}
+
 function formatDurationText(minutes) {
   const safeMinutes = Math.max(0, Math.round(Number(minutes) || 0));
   const hours = Math.floor(safeMinutes / 60);
@@ -650,8 +761,10 @@ els.loginPin.addEventListener("keydown", (event) => {
 });
 els.lockButton.addEventListener("click", lock);
 els.samplePrintButton.addEventListener("click", printSamplePayslip);
+els.sampleAttendancePrintButton.addEventListener("click", printSampleAttendanceSheet);
 els.refreshButton.addEventListener("click", fetchRemoteState);
 els.printAllButton.addEventListener("click", () => printPayslips(state.staffMembers.map((staff) => staff.id)));
+els.printAllAttendanceButton.addEventListener("click", () => printAttendanceSheets(state.staffMembers.map((staff) => staff.id)));
 els.payrollMonth.addEventListener("change", render);
 ["pointerdown", "keydown", "touchstart"].forEach((eventName) => document.addEventListener(eventName, keepUnlocked, { capture: true }));
 setInterval(expireIfNeeded, 30 * 1000);

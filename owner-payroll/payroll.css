@@ -394,6 +394,66 @@ h3 {
   font-weight: 1000;
 }
 
+.attendance-print-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 12px 0 16px;
+}
+
+.attendance-print-summary div {
+  padding: 10px;
+  border: 1px solid #d5d5d5;
+  background: #f6f9f9;
+}
+
+.attendance-print-summary span {
+  display: block;
+  color: #54636c;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.attendance-print-summary strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 16px;
+}
+
+.attendance-confirm-note {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 10px;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid #0f766e;
+  background: #eef8f6;
+  font-size: 13px;
+}
+
+.attendance-print-table {
+  font-size: 11px;
+}
+
+.attendance-print-table th,
+.attendance-print-table td {
+  padding: 6px;
+}
+
+.attendance-print-table .is-absent-row td {
+  background: #fff3f0;
+}
+
+.attendance-reply-box {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #111;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 @media (max-width: 980px) {
   .app-grid {
     grid-template-columns: 1fr;

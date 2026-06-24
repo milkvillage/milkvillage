@@ -18,7 +18,8 @@
         </div>
         <div class="top-actions">
           <span class="status-pill" id="connectionStatus">대기</span>
-          <button class="button button--ghost" id="samplePrintButton" type="button">샘플 PDF 보기</button>
+          <button class="button button--ghost" id="samplePrintButton" type="button">샘플 급여 PDF</button>
+          <button class="button button--ghost" id="sampleAttendancePrintButton" type="button">샘플 근퇴 PDF</button>
           <button class="button button--ghost" id="lockButton" type="button" hidden>잠금</button>
         </div>
       </header>
@@ -58,7 +59,8 @@
               <input id="payrollMonth" type="month" />
             </label>
             <button class="button button--primary" id="refreshButton" type="button">근퇴기록 불러오기</button>
-            <button class="button button--ghost" id="printAllButton" type="button">전체 PDF 출력</button>
+            <button class="button button--ghost" id="printAllButton" type="button">전체 급여 PDF 출력</button>
+            <button class="button button--ghost" id="printAllAttendanceButton" type="button">전체 근퇴 PDF 출력</button>
             <p class="muted" id="remoteUpdatedText">아직 불러오지 않았습니다.</p>
           </section>
 
