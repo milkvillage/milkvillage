@@ -34,6 +34,7 @@ const timeSelectOptions = Array.from({ length: 49 }, (_, index) => {
   const minute = totalMinutes % 60;
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 });
+const attendanceBreakOptions = Array.from({ length: 7 }, (_, index) => index * 30);
 const LOG_RETENTION_DAYS = {
   alarmEventLogs: 30,
   inventoryTransactions: 90,
@@ -430,6 +431,13 @@ function minutesBetween(startTime, endTime) {
   return end >= start ? end - start : end + 24 * 60 - start;
 }
 
+function normalizeBreakMinutes(value) {
+  const minutes = Number(value);
+  if (!Number.isFinite(minutes) || minutes <= 0) return 0;
+  const rounded = Math.round(minutes / 30) * 30;
+  return Math.min(180, Math.max(0, rounded));
+}
+
 function formatTimeRange(startTime, endTime) {
   return startTime && endTime ? `${startTime}-${endTime}` : "예정 없음";
 }
@@ -447,9 +455,13 @@ function formatDurationText(minutes) {
   return `${remainingMinutes}분`;
 }
 
-function formatWorkDuration(startTime, endTime) {
+function formatBreakDuration(minutes) {
+  return formatDurationText(normalizeBreakMinutes(minutes));
+}
+
+function formatWorkDuration(startTime, endTime, breakMinutes = 0) {
   const minutes = minutesBetween(startTime, endTime);
-  return minutes === null ? "" : formatDurationText(minutes);
+  return minutes === null ? "" : formatDurationText(Math.max(0, minutes - normalizeBreakMinutes(breakMinutes)));
 }
 
 function renderTimeSelect(attributes = {}, selectedValue = "", label = "") {
@@ -699,6 +711,7 @@ function normalizeAttendanceRecord(record) {
     scheduledEnd: normalizeTimeValue(record?.scheduledEnd),
     actualStart: normalizeTimeValue(record?.actualStart),
     actualEnd: normalizeTimeValue(record?.actualEnd),
+    breakMinutes: normalizeBreakMinutes(record?.breakMinutes),
     adjustmentReason: record?.adjustmentReason || "",
     recordedAt: record?.recordedAt || record?.updatedAt || nowIso(),
     updatedAt: record?.updatedAt || record?.recordedAt || nowIso(),
@@ -1536,6 +1549,20 @@ function renderAlarmQuickChoices(values, datasetName) {
   `;
 }
 
+function renderBreakSelect(attributes = {}, selectedMinutes = 0, label = "휴게시간") {
+  const normalizedMinutes = normalizeBreakMinutes(selectedMinutes);
+  const attributeText = Object.entries(attributes)
+    .map(([key, value]) => `${key}="${escapeAttr(value)}"`)
+    .join(" ");
+  return `
+    <select ${attributeText} aria-label="${escapeAttr(label)}">
+      ${attendanceBreakOptions
+        .map((minutes) => `<option value="${minutes}" ${minutes === normalizedMinutes ? "selected" : ""}>${formatBreakDuration(minutes)}</option>`)
+        .join("")}
+    </select>
+  `;
+}
+
 function makeDefaultServiceManuals(createdAt = nowIso()) {
   return [
     makeServiceManual(
@@ -1869,6 +1896,7 @@ function getAttendanceTimingValues(staff, dateKey, record = null) {
     scheduledEnd,
     actualStart: record?.actualStart || scheduledStart,
     actualEnd: record?.actualEnd || scheduledEnd,
+    breakMinutes: normalizeBreakMinutes(record?.breakMinutes),
     adjustmentReason: record?.adjustmentReason || "",
   };
 }
@@ -2721,7 +2749,7 @@ function renderAttendanceScreen() {
           <section class="attendance-time-panel">
             <div class="attendance-time-heading">
               <strong>근무시간</strong>
-              <span>${selectedRecord ? attendanceTimingSummary(selectedRecord) || "시간 기록 없음" : formatTimeRange(timingValues.scheduledStart, timingValues.scheduledEnd)}</span>
+              <span>${selectedRecord ? attendanceRecordedWorkText(selectedRecord) || "시간 기록 없음" : formatTimeRange(timingValues.scheduledStart, timingValues.scheduledEnd)}</span>
             </div>
             <div class="attendance-time-grid">
               <label class="field">
@@ -2739,6 +2767,10 @@ function renderAttendanceScreen() {
               <label class="field">
                 <span>실제 퇴근</span>
                 ${renderTimeSelect({ id: "attendanceActualEnd" }, timingValues.actualEnd, "실제 퇴근")}
+              </label>
+              <label class="field">
+                <span>휴게시간</span>
+                ${renderBreakSelect({ id: "attendanceBreakMinutes" }, timingValues.breakMinutes, "휴게시간")}
               </label>
             </div>
             <label class="field">
@@ -2882,6 +2914,7 @@ function buildAttendanceDraft(status, container) {
   const scheduledEnd = normalizeTimeValue(container.querySelector("#attendanceScheduledEnd")?.value);
   const actualStart = normalizeTimeValue(container.querySelector("#attendanceActualStart")?.value);
   const actualEnd = normalizeTimeValue(container.querySelector("#attendanceActualEnd")?.value);
+  const breakMinutes = normalizeBreakMinutes(container.querySelector("#attendanceBreakMinutes")?.value);
   if (status === "present" && (!actualStart || !actualEnd)) {
     alert("실제 출근/퇴근 시간을 입력해주세요.");
     return null;
@@ -2898,18 +2931,21 @@ function buildAttendanceDraft(status, container) {
     scheduledEnd,
     actualStart: status === "present" ? actualStart : "",
     actualEnd: status === "present" ? actualEnd : "",
+    breakMinutes: status === "present" ? breakMinutes : 0,
     adjustmentReason: container.querySelector("#attendanceAdjustmentReason")?.value.trim() || "",
   };
 }
 
 function attendanceConfirmSummaryRows(draft) {
   const timeText = draft.status === "present" ? formatClockRange(draft.actualStart, draft.actualEnd) || "시간 없음" : "결근";
-  const workDurationText = draft.status === "present" ? formatWorkDuration(draft.actualStart, draft.actualEnd) || "시간 없음" : "0시간";
+  const breakMinutes = draft.status === "present" ? normalizeBreakMinutes(draft.breakMinutes) : 0;
+  const workDurationText = draft.status === "present" ? formatWorkDuration(draft.actualStart, draft.actualEnd, breakMinutes) || "시간 없음" : "0시간";
   return [
     ["근무자", draft.staffName],
     ["날짜", formatAttendanceDate(draft.date)],
     ["구분", attendanceStatusLabel(draft.status)],
     ["시간", timeText],
+    ["휴게시간", formatBreakDuration(breakMinutes)],
     ["근무시간", workDurationText],
     ...(draft.adjustmentReason ? [["변경 사유", draft.adjustmentReason]] : []),
   ];
@@ -3001,6 +3037,7 @@ function saveAttendanceRecord(draft) {
       scheduledEnd: "",
       actualStart: "",
       actualEnd: "",
+      breakMinutes: 0,
       adjustmentReason: "",
       recordedAt: updatedAt,
       updatedAt,
@@ -3015,6 +3052,7 @@ function saveAttendanceRecord(draft) {
   record.scheduledEnd = draft.scheduledEnd;
   record.actualStart = draft.actualStart;
   record.actualEnd = draft.actualEnd;
+  record.breakMinutes = draft.breakMinutes;
   record.adjustmentReason = draft.adjustmentReason;
   record.recordedAt = record.recordedAt || updatedAt;
   record.updatedAt = updatedAt;
@@ -3047,6 +3085,7 @@ function confirmManagerAttendance(container) {
     status: record.status,
     actualStart: record.actualStart,
     actualEnd: record.actualEnd,
+    breakMinutes: record.breakMinutes,
     adjustmentReason: record.adjustmentReason,
     managerSignature,
   });
@@ -3185,6 +3224,14 @@ function attendanceTimingSummary(record) {
   if (Math.abs(delta) < 1) return "정상";
   const prefix = delta > 0 ? "+" : "-";
   return `${prefix}${formatDurationShort(Math.abs(delta))}`;
+}
+
+function attendanceRecordedWorkText(record) {
+  if (!record) return "";
+  if (record.status === "absent") return "결근";
+  const workText = formatWorkDuration(record.actualStart, record.actualEnd, record.breakMinutes);
+  if (!workText) return "";
+  return `근무 ${workText}`;
 }
 
 function attendanceTimingClass(record) {
