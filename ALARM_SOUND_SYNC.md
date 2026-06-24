@@ -10,13 +10,15 @@
 .\scripts\set-alarm-sync-key.ps1
 ```
 
-2. 아래 명령으로 5분마다 자동 확인하는 Windows 작업을 등록합니다.
+2. 아래 명령으로 60분마다 자동 확인하는 Windows 작업을 등록합니다.
 
 ```powershell
 .\scripts\install-alarm-sound-sync.ps1
 ```
 
-설치 후 Windows 작업 스케줄러가 5분마다 `C:\milk village\02_sound` 폴더를 확인합니다.
+설치 후 Windows 작업 스케줄러가 60분마다 `C:\milk village\02_sound` 폴더를 확인합니다.
+
+폴더에 넣은 mp3를 바로 반영하고 싶을 때는 아래 수동 실행 명령을 사용합니다.
 
 ## 수동 실행
 

@@ -1,6 +1,6 @@
 param(
   [string]$TaskName = "MilkVillageAlarmSoundSync",
-  [int]$Minutes = 5
+  [int]$Minutes = 60
 )
 
 $ErrorActionPreference = "Stop"
