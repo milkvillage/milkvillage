@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="theme-color" content="#0f766e" />
+    <title>Milk Village 대표 급여</title>
+    <link rel="stylesheet" href="./payroll.css?v=20260624-owner-payroll-v1" />
+  </head>
+  <body>
+    <main class="payroll-shell">
+      <header class="payroll-top">
+        <div>
+          <p class="eyebrow">Milk Village</p>
+          <h1>대표 급여 관리</h1>
+          <p class="top-copy">근퇴기록을 기준으로 월급, 주휴수당, 3.3% 공제액을 계산합니다.</p>
+        </div>
+        <div class="top-actions">
+          <span class="status-pill" id="connectionStatus">대기</span>
+          <button class="button button--ghost" id="lockButton" type="button" hidden>잠금</button>
+        </div>
+      </header>
+
+      <section class="lock-card" id="setupPanel" hidden>
+        <h2>대표 PIN 설정</h2>
+        <p>이 브라우저에서 급여 화면을 열 때 사용할 대표 전용 PIN을 설정합니다.</p>
+        <label class="field">
+          <span>새 대표 PIN</span>
+          <input id="setupPin" type="password" inputmode="numeric" autocomplete="new-password" placeholder="4자리 이상" />
+        </label>
+        <label class="field">
+          <span>PIN 확인</span>
+          <input id="setupPinConfirm" type="password" inputmode="numeric" autocomplete="new-password" placeholder="다시 입력" />
+        </label>
+        <button class="button button--primary" id="setupButton" type="button">대표 PIN 저장</button>
+        <p class="muted">시급과 급여 설정은 이 브라우저에만 저장됩니다.</p>
+      </section>
+
+      <section class="lock-card" id="loginPanel" hidden>
+        <h2>대표 확인</h2>
+        <p>급여 정보는 대표 PIN 입력 후에만 표시됩니다.</p>
+        <label class="field">
+          <span>대표 PIN</span>
+          <input id="loginPin" type="password" inputmode="numeric" autocomplete="current-password" placeholder="PIN 입력" />
+        </label>
+        <button class="button button--primary" id="loginButton" type="button">열기</button>
+        <p class="muted">10분 동안 조작이 없으면 자동으로 잠깁니다.</p>
+      </section>
+
+      <section class="app-grid" id="appPanel" hidden>
+        <aside class="control-panel">
+          <section class="panel-card">
+            <h2>급여 기준</h2>
+            <label class="field">
+              <span>정산 월</span>
+              <input id="payrollMonth" type="month" />
+            </label>
+            <button class="button button--primary" id="refreshButton" type="button">근퇴기록 불러오기</button>
+            <button class="button button--ghost" id="printAllButton" type="button">전체 PDF 출력</button>
+            <p class="muted" id="remoteUpdatedText">아직 불러오지 않았습니다.</p>
+          </section>
+
+          <section class="panel-card">
+            <h2>직원별 시급</h2>
+            <div class="staff-rate-list" id="staffRateList"></div>
+            <p class="muted">주휴수당은 월 내 근퇴기록 기준의 예상 계산입니다.</p>
+          </section>
+        </aside>
+
+        <section class="result-panel">
+          <section class="summary-grid" id="summaryGrid"></section>
+          <section class="payroll-list" id="payrollList"></section>
+        </section>
+      </section>
+    </main>
+
+    <section class="print-area" id="printArea" aria-label="급여명세서 출력 영역"></section>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="./payroll.js?v=20260624-owner-payroll-v1"></script>
+  </body>
+</html>
