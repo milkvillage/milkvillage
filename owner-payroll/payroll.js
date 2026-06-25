@@ -202,8 +202,7 @@ function normalizeAttendanceStatus(status) {
 }
 
 function isAttendanceWorkStatus(status) {
-  const normalizedStatus = normalizeAttendanceStatus(status);
-  return normalizedStatus === "present" || normalizedStatus === "late";
+  return status === "present" || status === "late";
 }
 
 function normalizeAbsenceType(type) {
