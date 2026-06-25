@@ -1695,6 +1695,15 @@ th {
   color: white;
 }
 
+.button--warning {
+  background: #f6c343;
+  color: #332500;
+}
+
+.button--warning:hover {
+  background: #e3ae1f;
+}
+
 .button--confirm {
   background: #b7791f;
   color: white;
@@ -2132,10 +2141,39 @@ th {
   box-shadow: 0 0 0 3px rgba(210, 54, 44, 0.2);
 }
 
+.signature-actions .button--warning.is-selected {
+  box-shadow: 0 0 0 3px rgba(246, 195, 67, 0.35);
+}
+
 .signature-help {
   color: var(--muted);
   font-size: 14px;
   font-weight: 800;
+}
+
+.attendance-absence-type {
+  display: grid;
+  grid-template-columns: minmax(88px, auto) minmax(150px, 1fr);
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+  color: var(--muted);
+  font-weight: 900;
+}
+
+.attendance-absence-type.is-hidden {
+  display: none;
+}
+
+.attendance-absence-type select {
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  color: var(--text);
+  font: inherit;
+  font-weight: 900;
 }
 
 .signature-heading .button.is-confirming {
@@ -2182,6 +2220,12 @@ th {
   color: var(--green);
 }
 
+.attendance-current-status.is-late,
+.attendance-chip.is-late {
+  background: #fff4d8;
+  color: #8a5b10;
+}
+
 .attendance-current-status.is-pending-confirmation,
 .attendance-chip.is-pending-confirmation {
   background: #eef1f3;
@@ -2198,6 +2242,10 @@ th {
 
 .attendance-chip.is-undertime {
   border-left: 4px solid var(--red);
+}
+
+.attendance-chip.is-late-time {
+  border-left: 4px solid #b7791f;
 }
 
 .attendance-current-status.is-absent,

@@ -35,6 +35,10 @@ const timeSelectOptions = Array.from({ length: 49 }, (_, index) => {
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 });
 const attendanceBreakOptions = Array.from({ length: 7 }, (_, index) => index * 30);
+const absenceTypeOptions = [
+  { value: "approved", label: "협의 결근" },
+  { value: "unexcused", label: "무단 결근" },
+];
 const LOG_RETENTION_DAYS = {
   alarmEventLogs: 30,
   inventoryTransactions: 90,
@@ -194,6 +198,7 @@ const state = {
   pendingCancelBatchId: null,
   pendingMeasuredVariantId: null,
   pendingAttendanceStatus: null,
+  pendingAttendanceAbsenceType: "approved",
   pendingAttendanceKey: "",
   pendingAttendanceDraft: null,
   suppliesUndoStack: [],
@@ -697,14 +702,32 @@ function normalizeStaffMember(staff, index = 0) {
   };
 }
 
+function normalizeAttendanceStatus(status) {
+  return status === "absent" || status === "late" ? status : "present";
+}
+
+function isAttendanceWorkStatus(status) {
+  const normalizedStatus = normalizeAttendanceStatus(status);
+  return normalizedStatus === "present" || normalizedStatus === "late";
+}
+
+function normalizeAbsenceType(type) {
+  return type === "unexcused" ? "unexcused" : "approved";
+}
+
+function attendanceAbsenceTypeLabel(type) {
+  return normalizeAbsenceType(type) === "unexcused" ? "무단 결근" : "협의 결근";
+}
+
 function normalizeAttendanceRecord(record) {
-  const status = record?.status === "absent" ? "absent" : "present";
+  const status = normalizeAttendanceStatus(record?.status);
   return {
     id: record?.id || uid("attendance"),
     date: record?.date || todayDateKey(),
     staffId: record?.staffId || "",
     staffName: record?.staffName || "",
     status,
+    absenceType: status === "absent" ? normalizeAbsenceType(record?.absenceType) : "",
     employeeSignature: record?.employeeSignature || "",
     managerSignature: record?.managerSignature || "",
     scheduledStart: normalizeTimeValue(record?.scheduledStart),
@@ -2707,23 +2730,26 @@ function renderAttendanceScreen() {
   const timingValues = getAttendanceTimingValues(selectedStaff, selectedDate, selectedRecord);
   const employeeSignatureLocked = Boolean(selectedRecord?.employeeSignature);
   const managerCanSign = Boolean(
-    selectedRecord?.status === "present" && selectedRecord.employeeSignature && !selectedRecord.managerSignature,
+    isAttendanceWorkStatus(selectedRecord?.status) && selectedRecord.employeeSignature && !selectedRecord.managerSignature,
   );
   const managerSignatureLocked = !managerCanSign;
   const attendanceDraftKey = selectedStaff ? getAttendanceDraftKey(selectedDate, selectedStaff.id) : "";
   if (!attendanceDraftKey || selectedRecord || state.pendingAttendanceKey !== attendanceDraftKey) {
     state.pendingAttendanceStatus = null;
+    state.pendingAttendanceAbsenceType = "approved";
     state.pendingAttendanceKey = attendanceDraftKey;
   }
   const pendingAttendanceStatus = employeeSignatureLocked ? null : state.pendingAttendanceStatus;
   const presentSelected = pendingAttendanceStatus === "present";
+  const lateSelected = pendingAttendanceStatus === "late";
   const absentSelected = pendingAttendanceStatus === "absent";
+  const selectedAbsenceType = normalizeAbsenceType(state.pendingAttendanceAbsenceType);
 
   els.workArea.innerHTML = `
     <section class="attendance-screen" aria-label="근퇴기록">
       <div class="panel-header">
         <h2>근퇴기록</h2>
-        <p>달력에서 날짜를 선택한 뒤 근무자 이름, 출근/결근, 서명을 기록합니다.</p>
+        <p>달력에서 날짜를 선택한 뒤 근무자 이름, 출근/지각/결근, 서명을 기록합니다.</p>
       </div>
       <div class="attendance-body">
         <section class="attendance-card">
@@ -2787,6 +2813,7 @@ function renderAttendanceScreen() {
               <canvas class="signature-pad" id="employeeSignaturePad" aria-label="근무자 서명 입력"></canvas>
               <div class="signature-actions">
                 <button class="button ${presentSelected ? "button--primary is-selected" : "button--ghost"}" type="button" data-attendance-status="present" aria-pressed="${presentSelected ? "true" : "false"}" ${selectedStaff && !employeeSignatureLocked ? "" : "disabled"}>출근</button>
+                <button class="button ${lateSelected ? "button--warning is-selected" : "button--ghost"}" type="button" data-attendance-status="late" aria-pressed="${lateSelected ? "true" : "false"}" ${selectedStaff && !employeeSignatureLocked ? "" : "disabled"}>지각</button>
                 <button class="button ${absentSelected ? "button--danger is-selected" : "button--ghost"}" type="button" data-attendance-status="absent" aria-pressed="${absentSelected ? "true" : "false"}" ${selectedStaff && !employeeSignatureLocked ? "" : "disabled"}>결근</button>
                 <button class="button button--confirm" type="button" id="confirmEmployeeAttendance" ${pendingAttendanceStatus && selectedStaff && !employeeSignatureLocked ? "" : "disabled"}>확인</button>
                 <span class="signature-help" id="employeeAttendanceHelp">${
@@ -2794,9 +2821,21 @@ function renderAttendanceScreen() {
                     ? "근무자 기록이 저장되어 수정할 수 없습니다."
                     : pendingAttendanceStatus
                       ? `${attendanceStatusLabel(pendingAttendanceStatus)} 선택됨. 확인을 누르면 최종 확인창이 열립니다.`
-                      : "출근 또는 결근을 선택한 뒤 확인하세요."
+                      : "출근, 지각, 결근 중 하나를 선택한 뒤 확인하세요."
                 }</span>
               </div>
+              <label class="attendance-absence-type ${absentSelected ? "" : "is-hidden"}" id="attendanceAbsenceTypeWrap">
+                <span>결근 유형</span>
+                <select id="attendanceAbsenceType" ${selectedStaff && !employeeSignatureLocked ? "" : "disabled"}>
+                  ${absenceTypeOptions
+                    .map(
+                      (option) => `
+                        <option value="${option.value}" ${option.value === selectedAbsenceType ? "selected" : ""}>${option.label}</option>
+                      `,
+                    )
+                    .join("")}
+                </select>
+              </label>
             </div>
             <div class="signature-card">
               <div class="signature-heading">
@@ -2853,6 +2892,13 @@ function renderAttendanceScreen() {
   els.workArea.querySelectorAll("[data-attendance-status]").forEach((button) => {
     button.addEventListener("click", () => selectPendingAttendanceStatus(button.dataset.attendanceStatus, els.workArea));
   });
+  els.workArea.querySelector("#attendanceAbsenceType")?.addEventListener("change", (event) => {
+    state.pendingAttendanceAbsenceType = normalizeAbsenceType(event.target.value);
+    const help = els.workArea.querySelector("#employeeAttendanceHelp");
+    if (help && state.pendingAttendanceStatus === "absent") {
+      help.textContent = `${attendanceAbsenceTypeLabel(state.pendingAttendanceAbsenceType)} 선택됨. 확인을 누르면 최종 확인창이 열립니다.`;
+    }
+  });
   els.workArea.querySelector("#confirmEmployeeAttendance")?.addEventListener("click", () => openAttendanceConfirmModal(els.workArea));
   els.workArea.querySelector("#confirmManagerAttendance")?.addEventListener("click", () => confirmManagerAttendance(els.workArea));
   els.workArea.querySelector("#deleteAttendanceRecord")?.addEventListener("click", deleteAttendanceRecord);
@@ -2881,24 +2927,35 @@ function selectPendingAttendanceStatus(status, container) {
   }
   if (getAttendanceRecord(getSelectedAttendanceDate(), staff.id)) return;
 
-  const nextStatus = status === "absent" ? "absent" : "present";
+  const nextStatus = normalizeAttendanceStatus(status);
   state.pendingAttendanceStatus = nextStatus;
+  if (nextStatus === "absent") state.pendingAttendanceAbsenceType = normalizeAbsenceType(state.pendingAttendanceAbsenceType);
   state.pendingAttendanceKey = getAttendanceDraftKey(getSelectedAttendanceDate(), staff.id);
   container.querySelectorAll("[data-attendance-status]").forEach((button) => {
-    const isSelected = button.dataset.attendanceStatus === nextStatus;
+    const buttonStatus = normalizeAttendanceStatus(button.dataset.attendanceStatus);
+    const isSelected = buttonStatus === nextStatus;
     button.classList.toggle("is-selected", isSelected);
     button.classList.toggle("button--ghost", !isSelected);
-    button.classList.toggle("button--primary", isSelected && button.dataset.attendanceStatus === "present");
-    button.classList.toggle("button--danger", isSelected && button.dataset.attendanceStatus === "absent");
+    button.classList.toggle("button--primary", isSelected && buttonStatus === "present");
+    button.classList.toggle("button--warning", isSelected && buttonStatus === "late");
+    button.classList.toggle("button--danger", isSelected && buttonStatus === "absent");
     button.setAttribute("aria-pressed", isSelected ? "true" : "false");
   });
+  const absenceTypeWrap = container.querySelector("#attendanceAbsenceTypeWrap");
+  if (absenceTypeWrap) absenceTypeWrap.classList.toggle("is-hidden", nextStatus !== "absent");
   const confirmButton = container.querySelector("#confirmEmployeeAttendance");
   if (confirmButton) confirmButton.disabled = false;
   const help = container.querySelector("#employeeAttendanceHelp");
-  if (help) help.textContent = `${attendanceStatusLabel(nextStatus)} 선택됨. 확인을 누르면 최종 확인창이 열립니다.`;
+  if (help) {
+    help.textContent =
+      nextStatus === "absent"
+        ? `${attendanceAbsenceTypeLabel(state.pendingAttendanceAbsenceType)} 선택됨. 확인을 누르면 최종 확인창이 열립니다.`
+        : `${attendanceStatusLabel(nextStatus)} 선택됨. 확인을 누르면 최종 확인창이 열립니다.`;
+  }
 }
 
 function buildAttendanceDraft(status, container) {
+  const normalizedStatus = normalizeAttendanceStatus(status);
   const staff = getStaffMember(state.selectedAttendanceStaffId);
   if (!staff) {
     alert("근무자 이름을 먼저 선택해주세요.");
@@ -2915,35 +2972,39 @@ function buildAttendanceDraft(status, container) {
   const actualStart = normalizeTimeValue(container.querySelector("#attendanceActualStart")?.value);
   const actualEnd = normalizeTimeValue(container.querySelector("#attendanceActualEnd")?.value);
   const breakMinutes = normalizeBreakMinutes(container.querySelector("#attendanceBreakMinutes")?.value);
-  if (status === "present" && (!actualStart || !actualEnd)) {
+  if (isAttendanceWorkStatus(normalizedStatus) && (!actualStart || !actualEnd)) {
     alert("실제 출근/퇴근 시간을 입력해주세요.");
     return null;
   }
+  const absenceType = normalizeAbsenceType(container.querySelector("#attendanceAbsenceType")?.value || state.pendingAttendanceAbsenceType);
 
   return {
     confirmType: "employee",
     date: getSelectedAttendanceDate(),
     staffId: staff.id,
     staffName: staff.name,
-    status: status === "absent" ? "absent" : "present",
+    status: normalizedStatus,
+    absenceType: normalizedStatus === "absent" ? absenceType : "",
     employeeSignature,
     scheduledStart,
     scheduledEnd,
-    actualStart: status === "present" ? actualStart : "",
-    actualEnd: status === "present" ? actualEnd : "",
-    breakMinutes: status === "present" ? breakMinutes : 0,
+    actualStart: isAttendanceWorkStatus(normalizedStatus) ? actualStart : "",
+    actualEnd: isAttendanceWorkStatus(normalizedStatus) ? actualEnd : "",
+    breakMinutes: isAttendanceWorkStatus(normalizedStatus) ? breakMinutes : 0,
     adjustmentReason: container.querySelector("#attendanceAdjustmentReason")?.value.trim() || "",
   };
 }
 
 function attendanceConfirmSummaryRows(draft) {
-  const timeText = draft.status === "present" ? formatClockRange(draft.actualStart, draft.actualEnd) || "시간 없음" : "결근";
-  const breakMinutes = draft.status === "present" ? normalizeBreakMinutes(draft.breakMinutes) : 0;
-  const workDurationText = draft.status === "present" ? formatWorkDuration(draft.actualStart, draft.actualEnd, breakMinutes) || "시간 없음" : "0시간";
+  const isWorkRecord = isAttendanceWorkStatus(draft.status);
+  const timeText = isWorkRecord ? formatClockRange(draft.actualStart, draft.actualEnd) || "시간 없음" : attendanceAbsenceTypeLabel(draft.absenceType);
+  const breakMinutes = isWorkRecord ? normalizeBreakMinutes(draft.breakMinutes) : 0;
+  const workDurationText = isWorkRecord ? formatWorkDuration(draft.actualStart, draft.actualEnd, breakMinutes) || "시간 없음" : "0시간";
   return [
     ["근무자", draft.staffName],
     ["날짜", formatAttendanceDate(draft.date)],
     ["구분", attendanceStatusLabel(draft.status)],
+    ...(draft.status === "absent" ? [["결근 유형", attendanceAbsenceTypeLabel(draft.absenceType)]] : []),
     ["시간", timeText],
     ["휴게시간", formatBreakDuration(breakMinutes)],
     ["근무시간", workDurationText],
@@ -2954,7 +3015,7 @@ function attendanceConfirmSummaryRows(draft) {
 function openAttendanceConfirmModal(container) {
   const status = state.pendingAttendanceStatus;
   if (!status) {
-    alert("출근 또는 결근을 먼저 선택해주세요.");
+    alert("출근, 지각, 결근 중 하나를 먼저 선택해주세요.");
     return;
   }
   const draft = buildAttendanceDraft(status, container);
@@ -2992,7 +3053,7 @@ function getAttendanceConfirmTitle(draft) {
 function getAttendanceConfirmWarning(draft) {
   return draft?.confirmType === "manager"
     ? "최종확인을 누르면 매니저 서명은 수정할 수 없습니다."
-    : "최종확인을 누르면 근무자 서명과 출근/결근 기록은 수정할 수 없습니다.";
+    : "최종확인을 누르면 근무자 서명과 출근/지각/결근 기록은 수정할 수 없습니다.";
 }
 
 function getAttendanceConfirmText(draft) {
@@ -3013,6 +3074,7 @@ function finalizeAttendanceRecord() {
   } else {
     saveAttendanceRecord(draft);
     state.pendingAttendanceStatus = null;
+    state.pendingAttendanceAbsenceType = "approved";
     state.pendingAttendanceKey = "";
   }
   state.pendingAttendanceDraft = null;
@@ -3031,6 +3093,7 @@ function saveAttendanceRecord(draft) {
       staffId: draft.staffId,
       staffName: draft.staffName,
       status: "present",
+      absenceType: "",
       employeeSignature: "",
       managerSignature: "",
       scheduledStart: "",
@@ -3046,8 +3109,9 @@ function saveAttendanceRecord(draft) {
   }
   record.staffName = draft.staffName;
   record.status = draft.status;
+  record.absenceType = draft.status === "absent" ? normalizeAbsenceType(draft.absenceType) : "";
   record.employeeSignature = draft.employeeSignature;
-  if (record.status === "absent") record.managerSignature = "";
+  if (!isAttendanceWorkStatus(record.status)) record.managerSignature = "";
   record.scheduledStart = draft.scheduledStart;
   record.scheduledEnd = draft.scheduledEnd;
   record.actualStart = draft.actualStart;
@@ -3067,8 +3131,8 @@ function confirmManagerAttendance(container) {
     return;
   }
   const record = getAttendanceRecord(getSelectedAttendanceDate(), staff.id);
-  if (!record || record.status !== "present") {
-    alert("출근 기록을 먼저 저장해주세요.");
+  if (!record || !isAttendanceWorkStatus(record.status)) {
+    alert("출근 또는 지각 기록을 먼저 저장해주세요.");
     return;
   }
   const managerSignature = getSignaturePadData(container.querySelector("#managerSignaturePad"));
@@ -3083,6 +3147,8 @@ function confirmManagerAttendance(container) {
     staffId: record.staffId,
     staffName: staff.name,
     status: record.status,
+    scheduledStart: record.scheduledStart,
+    scheduledEnd: record.scheduledEnd,
     actualStart: record.actualStart,
     actualEnd: record.actualEnd,
     breakMinutes: record.breakMinutes,
@@ -3094,8 +3160,8 @@ function confirmManagerAttendance(container) {
 function saveManagerAttendance(draft) {
   if (!draft) return;
   const record = getAttendanceRecord(draft.date, draft.staffId);
-  if (!record || record.status !== "present") {
-    alert("출근 기록을 먼저 저장해주세요.");
+  if (!record || !isAttendanceWorkStatus(record.status)) {
+    alert("출근 또는 지각 기록을 먼저 저장해주세요.");
     renderAttendanceScreen();
     return;
   }
@@ -3168,14 +3234,18 @@ function renderAttendanceCalendar(monthKey) {
 }
 
 function attendanceStatusLabel(status) {
-  return status === "absent" ? "결근" : "출근";
+  const normalizedStatus = normalizeAttendanceStatus(status);
+  if (normalizedStatus === "absent") return "결근";
+  if (normalizedStatus === "late") return "지각";
+  return "출근";
 }
 
 function renderAttendanceCalendarChip(record) {
   const timingText = attendanceTimingSummary(record);
+  const statusText = record.status === "absent" ? attendanceAbsenceTypeLabel(record.absenceType) : attendanceStatusLabel(record.status);
   return `
     <span class="attendance-chip ${attendanceRecordStateClass(record)} ${isSignedPresentRecord(record) ? "is-signed" : ""} ${attendanceTimingClass(record)}">
-      <span class="attendance-chip-text">${escapeHtml(record.staffName)} ${attendanceStatusLabel(record.status)}</span>
+      <span class="attendance-chip-text">${escapeHtml(record.staffName)} ${escapeHtml(statusText)}</span>
       ${
         isSignedPresentRecord(record)
           ? `<span class="attendance-signature-icon" title="서명 완료" aria-label="서명 완료">
@@ -3191,34 +3261,47 @@ function renderAttendanceCalendarChip(record) {
 }
 
 function isSignedPresentRecord(record) {
-  return record?.status === "present" && Boolean(record.employeeSignature) && Boolean(record.managerSignature);
+  return isAttendanceWorkStatus(record?.status) && Boolean(record.employeeSignature) && Boolean(record.managerSignature);
 }
 
 function attendanceRecordStateClass(record) {
   if (record?.status === "absent") return "is-absent";
+  if (record?.status === "late") return isSignedPresentRecord(record) ? "is-late" : "is-pending-confirmation";
   return isSignedPresentRecord(record) ? "is-present" : "is-pending-confirmation";
 }
 
 function attendanceRecordStatusText(record) {
   const baseText =
-    record?.status === "present"
+    isAttendanceWorkStatus(record?.status)
       ? isSignedPresentRecord(record)
-        ? "출근 확인 완료"
-        : "출근 확인 대기"
-      : attendanceStatusLabel(record?.status);
+        ? `${attendanceStatusLabel(record?.status)} 확인 완료`
+        : `${attendanceStatusLabel(record?.status)} 확인 대기`
+      : attendanceAbsenceTypeLabel(record?.absenceType);
   const timingText = attendanceTimingSummary(record);
   return timingText ? `${baseText} ${timingText}` : baseText;
 }
 
 function attendanceTimingDeltaMinutes(record) {
-  if (record?.status !== "present") return null;
+  if (!isAttendanceWorkStatus(record?.status)) return null;
   const scheduledMinutes = minutesBetween(record.scheduledStart, record.scheduledEnd);
   const actualMinutes = minutesBetween(record.actualStart, record.actualEnd);
   if (scheduledMinutes === null || actualMinutes === null) return null;
   return actualMinutes - scheduledMinutes;
 }
 
+function attendanceLateMinutes(record) {
+  if (record?.status !== "late") return 0;
+  const scheduledStart = timeToMinutes(record.scheduledStart);
+  const actualStart = timeToMinutes(record.actualStart);
+  if (scheduledStart === null || actualStart === null) return 0;
+  return Math.max(0, actualStart - scheduledStart);
+}
+
 function attendanceTimingSummary(record) {
+  if (record?.status === "late") {
+    const lateMinutes = attendanceLateMinutes(record);
+    return lateMinutes ? `지각 ${formatDurationShort(lateMinutes)}` : "지각";
+  }
   const delta = attendanceTimingDeltaMinutes(record);
   if (delta === null) return "";
   if (Math.abs(delta) < 1) return "정상";
@@ -3228,13 +3311,14 @@ function attendanceTimingSummary(record) {
 
 function attendanceRecordedWorkText(record) {
   if (!record) return "";
-  if (record.status === "absent") return "결근";
+  if (record.status === "absent") return attendanceAbsenceTypeLabel(record.absenceType);
   const workText = formatWorkDuration(record.actualStart, record.actualEnd, record.breakMinutes);
   if (!workText) return "";
-  return `근무 ${workText}`;
+  return `${attendanceStatusLabel(record.status)} ${workText}`;
 }
 
 function attendanceTimingClass(record) {
+  if (record?.status === "late") return "is-late-time";
   const delta = attendanceTimingDeltaMinutes(record);
   if (delta === null || Math.abs(delta) < 1) return "is-normal-time";
   return delta > 0 ? "is-overtime" : "is-undertime";

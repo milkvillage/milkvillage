@@ -197,13 +197,38 @@ function normalizeStaffMembers(staffMembers) {
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ko-KR"));
 }
 
+function normalizeAttendanceStatus(status) {
+  return status === "absent" || status === "late" ? status : "present";
+}
+
+function isAttendanceWorkStatus(status) {
+  const normalizedStatus = normalizeAttendanceStatus(status);
+  return normalizedStatus === "present" || normalizedStatus === "late";
+}
+
+function normalizeAbsenceType(type) {
+  return type === "unexcused" ? "unexcused" : "approved";
+}
+
+function attendanceStatusLabel(status) {
+  const normalizedStatus = normalizeAttendanceStatus(status);
+  if (normalizedStatus === "absent") return "결근";
+  if (normalizedStatus === "late") return "지각";
+  return "출근";
+}
+
+function attendanceAbsenceTypeLabel(type) {
+  return normalizeAbsenceType(type) === "unexcused" ? "무단 결근" : "협의 결근";
+}
+
 function normalizeAttendanceRecords(records) {
   return (Array.isArray(records) ? records : []).map((record) => ({
     id: record?.id || "",
     date: record?.date || "",
     staffId: record?.staffId || "",
     staffName: record?.staffName || "",
-    status: record?.status === "absent" ? "absent" : "present",
+    status: normalizeAttendanceStatus(record?.status),
+    absenceType: normalizeAttendanceStatus(record?.status) === "absent" ? normalizeAbsenceType(record?.absenceType) : "",
     scheduledStart: normalizeTimeValue(record?.scheduledStart),
     scheduledEnd: normalizeTimeValue(record?.scheduledEnd),
     actualStart: normalizeTimeValue(record?.actualStart),
@@ -328,10 +353,13 @@ function renderPayrollList(payrolls) {
             <div class="metric"><span>기본급</span><strong>${formatWon(payroll.basePay)}</strong></div>
             <div class="metric"><span>주휴수당</span><strong>${formatWon(payroll.weeklyAllowancePay)}</strong></div>
             <div class="metric"><span>3.3% 공제</span><strong>${formatWon(payroll.withholdingAmount)}</strong></div>
+            <div class="metric"><span>지각</span><strong>${payroll.lateRecords.length}건</strong></div>
+            <div class="metric"><span>무단결근</span><strong>${payroll.unexcusedAbsenceRecords.length}건</strong></div>
             <div class="metric"><span>확인 대기</span><strong>${payroll.unconfirmedCount}건</strong></div>
           </div>
           ${payroll.hourlyRate && payroll.hourlyRate < MINIMUM_HOURLY_WAGE_2026 ? `<p class="notice">시급이 2026년 최저임금 ${formatWon(MINIMUM_HOURLY_WAGE_2026)}보다 낮습니다.</p>` : ""}
           ${payroll.unconfirmedCount ? `<p class="notice">매니저 서명이 없는 근퇴기록이 포함되어 있습니다.</p>` : ""}
+          ${payroll.weeklyAllowanceReviewFlags.length ? `<p class="notice">주휴수당 제외 검토: ${payroll.weeklyAllowanceReviewFlags.map(escapeHtml).join(" / ")}</p>` : ""}
           <div class="button-row">
             <button class="button button--primary button--small" type="button" data-print-staff="${escapeAttr(payroll.staff.id)}">급여 PDF</button>
             <button class="button button--ghost button--small" type="button" data-print-attendance="${escapeAttr(payroll.staff.id)}">근퇴 PDF</button>
@@ -359,8 +387,11 @@ function calculatePayroll(staff) {
   const records = state.attendanceRecords
     .filter((record) => record.staffId === staff.id && String(record.date || "").startsWith(state.selectedMonth))
     .sort((a, b) => a.date.localeCompare(b.date));
-  const presentRecords = records.filter((record) => record.status === "present" && record.actualStart && record.actualEnd);
+  const presentRecords = records.filter((record) => isAttendanceWorkStatus(record.status) && record.actualStart && record.actualEnd);
+  const lateRecords = records.filter((record) => record.status === "late");
   const absentRecords = records.filter((record) => record.status === "absent");
+  const unexcusedAbsenceRecords = absentRecords.filter((record) => normalizeAbsenceType(record.absenceType) === "unexcused");
+  const weeklyAllowanceReviewFlags = getWeeklyAllowanceReviewFlags(records);
   const workMinutes = presentRecords.reduce((sum, record) => sum + getRecordWorkMinutes(record), 0);
   const breakMinutes = presentRecords.reduce((sum, record) => sum + normalizeBreakMinutes(record.breakMinutes), 0);
   const weeklyAllowanceMinutes = setting.weeklyAllowance ? calculateWeeklyAllowanceMinutes(presentRecords) : 0;
@@ -376,7 +407,10 @@ function calculatePayroll(staff) {
     hourlyRate,
     records,
     presentRecords,
+    lateRecords,
     absentRecords,
+    unexcusedAbsenceRecords,
+    weeklyAllowanceReviewFlags,
     workMinutes,
     breakMinutes,
     weeklyAllowanceMinutes,
@@ -402,10 +436,50 @@ function calculateWeeklyAllowanceMinutes(records) {
   return allowanceMinutes;
 }
 
+function getWeeklyAllowanceReviewFlags(records) {
+  const weekly = new Map();
+  records.forEach((record) => {
+    const key = getWeekKey(record.date);
+    if (!weekly.has(key)) weekly.set(key, { late: 0, unexcusedAbsence: 0 });
+    const summary = weekly.get(key);
+    if (record.status === "late") summary.late += 1;
+    if (record.status === "absent" && normalizeAbsenceType(record.absenceType) === "unexcused") {
+      summary.unexcusedAbsence += 1;
+    }
+  });
+
+  return Array.from(weekly.entries())
+    .filter(([, summary]) => summary.late >= 2 || summary.unexcusedAbsence > 0)
+    .map(([weekKey, summary]) => {
+      const reasons = [];
+      if (summary.late >= 2) reasons.push(`지각 ${summary.late}회`);
+      if (summary.unexcusedAbsence > 0) reasons.push(`무단 결근 ${summary.unexcusedAbsence}건`);
+      return `${formatWeekLabel(weekKey)} ${reasons.join(", ")}`;
+    });
+}
+
 function getRecordWorkMinutes(record) {
   const minutes = minutesBetween(record.actualStart, record.actualEnd);
   if (minutes === null) return 0;
   return Math.max(0, minutes - normalizeBreakMinutes(record.breakMinutes));
+}
+
+function formatAttendanceRecordStatus(record) {
+  return record?.status === "absent" ? attendanceAbsenceTypeLabel(record.absenceType) : attendanceStatusLabel(record?.status);
+}
+
+function isAttendanceRecordConfirmed(record) {
+  if (!record) return false;
+  if (isAttendanceWorkStatus(record.status)) return Boolean(record.employeeSignature && record.managerSignature);
+  return Boolean(record.employeeSignature);
+}
+
+function formatAttendanceRecordNote(record, confirmText = "") {
+  const notes = [];
+  if (record?.adjustmentReason) notes.push(record.adjustmentReason);
+  if (record?.status === "absent") notes.push(attendanceAbsenceTypeLabel(record.absenceType));
+  if (record?.status !== "absent" && confirmText === "대기") notes.push("매니저 확인 필요");
+  return notes.join(" / ");
 }
 
 function printPayslips(staffIds) {
@@ -448,6 +522,9 @@ function makeSamplePayroll() {
       {
         date: `${state.selectedMonth}-03`,
         status: "present",
+        absenceType: "",
+        scheduledStart: "10:00",
+        scheduledEnd: "18:30",
         actualStart: "10:00",
         actualEnd: "18:30",
         breakMinutes: 60,
@@ -457,7 +534,10 @@ function makeSamplePayroll() {
       },
       {
         date: `${state.selectedMonth}-04`,
-        status: "present",
+        status: "late",
+        absenceType: "",
+        scheduledStart: "11:30",
+        scheduledEnd: "20:30",
         actualStart: "12:00",
         actualEnd: "21:00",
         breakMinutes: 60,
@@ -466,8 +546,22 @@ function makeSamplePayroll() {
         adjustmentReason: "피크타임 연장",
       },
       {
+        date: `${state.selectedMonth}-05`,
+        status: "late",
+        absenceType: "",
+        scheduledStart: "10:00",
+        scheduledEnd: "18:30",
+        actualStart: "10:30",
+        actualEnd: "18:30",
+        breakMinutes: 60,
+        employeeSignature: "sample",
+        managerSignature: "sample",
+        adjustmentReason: "",
+      },
+      {
         date: `${state.selectedMonth}-10`,
         status: "absent",
+        absenceType: "unexcused",
         actualStart: "",
         actualEnd: "",
         breakMinutes: 0,
@@ -477,7 +571,10 @@ function makeSamplePayroll() {
       },
     ],
     presentRecords: [],
+    lateRecords: [],
     absentRecords: [],
+    unexcusedAbsenceRecords: [],
+    weeklyAllowanceReviewFlags: [],
     workMinutes: 0,
     breakMinutes: 0,
     weeklyAllowanceMinutes: 8 * 60,
@@ -488,8 +585,11 @@ function makeSamplePayroll() {
     netPay: 0,
     unconfirmedCount: 0,
   };
-  samplePayroll.presentRecords = samplePayroll.records.filter((record) => record.status === "present");
+  samplePayroll.presentRecords = samplePayroll.records.filter((record) => isAttendanceWorkStatus(record.status));
+  samplePayroll.lateRecords = samplePayroll.records.filter((record) => record.status === "late");
   samplePayroll.absentRecords = samplePayroll.records.filter((record) => record.status === "absent");
+  samplePayroll.unexcusedAbsenceRecords = samplePayroll.absentRecords.filter((record) => normalizeAbsenceType(record.absenceType) === "unexcused");
+  samplePayroll.weeklyAllowanceReviewFlags = getWeeklyAllowanceReviewFlags(samplePayroll.records);
   samplePayroll.workMinutes = samplePayroll.presentRecords.reduce((sum, record) => sum + getRecordWorkMinutes(record), 0);
   samplePayroll.breakMinutes = samplePayroll.presentRecords.reduce((sum, record) => sum + normalizeBreakMinutes(record.breakMinutes), 0);
   samplePayroll.basePay = Math.round((samplePayroll.workMinutes / 60) * samplePayroll.hourlyRate);
@@ -516,7 +616,7 @@ function renderPayslip(payroll) {
         <tbody>
           <tr><th>근무자</th><td>${escapeHtml(payroll.staff.name)}</td><th>시급</th><td>${formatWon(payroll.hourlyRate)}</td></tr>
           <tr><th>총 근무시간</th><td>${formatDurationText(payroll.workMinutes)}</td><th>총 휴게시간</th><td>${formatDurationText(payroll.breakMinutes)}</td></tr>
-          <tr><th>근무일수</th><td>${payroll.presentRecords.length}일</td><th>결근기록</th><td>${payroll.absentRecords.length}건</td></tr>
+          <tr><th>근무일수</th><td>${payroll.presentRecords.length}일</td><th>지각/결근</th><td>${payroll.lateRecords.length}건 / ${payroll.absentRecords.length}건</td></tr>
         </tbody>
       </table>
       <table class="payslip-table">
@@ -531,6 +631,7 @@ function renderPayslip(payroll) {
         </tbody>
       </table>
       <div class="payslip-total">실지급액 ${formatWon(payroll.netPay)}</div>
+      ${payroll.weeklyAllowanceReviewFlags.length ? `<p class="notice">주휴수당 제외 검토: ${payroll.weeklyAllowanceReviewFlags.map(escapeHtml).join(" / ")}</p>` : ""}
       <h3>근퇴기록 상세</h3>
       <table class="payslip-table">
         <thead>
@@ -544,11 +645,11 @@ function renderPayslip(payroll) {
                     (record) => `
                       <tr>
                         <td>${escapeHtml(record.date)}</td>
-                        <td>${record.status === "absent" ? "결근" : "출근"}</td>
-                        <td>${record.status === "present" ? `${record.actualStart || "--:--"}~${record.actualEnd || "--:--"}` : "-"}</td>
+                        <td>${escapeHtml(formatAttendanceRecordStatus(record))}</td>
+                        <td>${isAttendanceWorkStatus(record.status) ? `${record.actualStart || "--:--"}~${record.actualEnd || "--:--"}` : "-"}</td>
                         <td>${formatBreakDuration(record.breakMinutes)}</td>
-                        <td>${record.status === "present" ? formatDurationText(getRecordWorkMinutes(record)) : "0분"}</td>
-                        <td>${record.employeeSignature && record.managerSignature ? "완료" : "대기"}</td>
+                        <td>${isAttendanceWorkStatus(record.status) ? formatDurationText(getRecordWorkMinutes(record)) : "0분"}</td>
+                        <td>${isAttendanceRecordConfirmed(record) ? "완료" : "대기"}</td>
                       </tr>
                     `,
                   )
@@ -557,7 +658,7 @@ function renderPayslip(payroll) {
           }
         </tbody>
       </table>
-      <p>주휴수당은 월 내 근퇴기록 기준의 예상 계산이며, 실제 지급 전 법정 요건을 확인해주세요.</p>
+      <p>주휴수당은 월 내 근퇴기록 기준의 예상 계산이며, 지각/무단 결근 등 제외 검토 사유는 대표가 지급 전 최종 확인해주세요.</p>
     </article>
   `;
 }
@@ -578,11 +679,14 @@ function renderAttendanceSheet(payroll) {
 
       <section class="attendance-print-summary">
         <div><span>근무자</span><strong>${escapeHtml(payroll.staff.name)}</strong></div>
-        <div><span>출근일</span><strong>${payroll.presentRecords.length}일</strong></div>
+        <div><span>근무일</span><strong>${payroll.presentRecords.length}일</strong></div>
+        <div><span>지각</span><strong>${payroll.lateRecords.length}건</strong></div>
         <div><span>결근</span><strong>${payroll.absentRecords.length}건</strong></div>
+        <div><span>무단결근</span><strong>${payroll.unexcusedAbsenceRecords.length}건</strong></div>
         <div><span>총 근무시간</span><strong>${formatDurationText(payroll.workMinutes)}</strong></div>
         <div><span>총 휴게시간</span><strong>${formatDurationText(payroll.breakMinutes)}</strong></div>
         <div><span>확인 대기</span><strong>${payroll.unconfirmedCount}건</strong></div>
+        <div><span>주휴 검토</span><strong>${payroll.weeklyAllowanceReviewFlags.length}건</strong></div>
       </section>
 
       <div class="attendance-confirm-note">
@@ -621,17 +725,17 @@ function renderAttendanceSheet(payroll) {
 }
 
 function renderAttendanceSheetRow(record) {
-  const isPresent = record.status === "present";
-  const confirmText = record.employeeSignature && record.managerSignature ? "완료" : "대기";
-  const note = record.adjustmentReason || (confirmText === "대기" && isPresent ? "매니저 확인 필요" : "");
+  const isWorkRecord = isAttendanceWorkStatus(record.status);
+  const confirmText = isAttendanceRecordConfirmed(record) ? "완료" : "대기";
+  const note = formatAttendanceRecordNote(record, confirmText);
   return `
-    <tr class="${isPresent ? "" : "is-absent-row"}">
+    <tr class="${isWorkRecord ? "" : "is-absent-row"}">
       <td>${escapeHtml(formatAttendanceDateLabel(record.date))}</td>
-      <td>${isPresent ? "출근" : "결근"}</td>
-      <td>${isPresent ? escapeHtml(record.actualStart || "--:--") : "-"}</td>
-      <td>${isPresent ? escapeHtml(record.actualEnd || "--:--") : "-"}</td>
+      <td>${escapeHtml(formatAttendanceRecordStatus(record))}</td>
+      <td>${isWorkRecord ? escapeHtml(record.actualStart || "--:--") : "-"}</td>
+      <td>${isWorkRecord ? escapeHtml(record.actualEnd || "--:--") : "-"}</td>
       <td>${formatBreakDuration(record.breakMinutes)}</td>
-      <td>${isPresent ? formatDurationText(getRecordWorkMinutes(record)) : "0분"}</td>
+      <td>${isWorkRecord ? formatDurationText(getRecordWorkMinutes(record)) : "0분"}</td>
       <td>${confirmText}</td>
       <td>${escapeHtml(note)}</td>
     </tr>
@@ -682,6 +786,14 @@ function getWeekKey(dateKey) {
   const dayOffset = (date.getDay() + 6) % 7;
   date.setDate(date.getDate() - dayOffset);
   return formatDateKey(date);
+}
+
+function formatWeekLabel(weekKey) {
+  const startDate = parseDateKey(weekKey);
+  if (!startDate) return weekKey || "";
+  const endDate = new Date(startDate);
+  endDate.setDate(startDate.getDate() + 6);
+  return `${formatAttendanceDateLabel(formatDateKey(startDate))}~${formatAttendanceDateLabel(formatDateKey(endDate))}`;
 }
 
 function parseDateKey(dateKey) {
