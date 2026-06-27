@@ -7,6 +7,7 @@ const ENABLE_REALTIME_SYNC = false;
 const REMOTE_POLL_INTERVAL_MS = 5 * 60 * 1000;
 const REMOTE_POLL_HIDDEN_INTERVAL_MS = 15 * 60 * 1000;
 const REMOTE_SAVE_DEBOUNCE_MS = 5000;
+const CHECKLIST_TEMPLATE_VERSION = "20260627-open-checklist-v1";
 const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const alarmDayOrder = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 const alarmDayLabels = {
@@ -35,6 +36,23 @@ const timeSelectOptions = Array.from({ length: 49 }, (_, index) => {
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 });
 const attendanceBreakOptions = Array.from({ length: 7 }, (_, index) => index * 30);
+const defaultOpenChecklistTasks = [
+  { title: "매장 조명/음악/키오스크 켜기" },
+  { title: "터미널 영업시작 버튼 클릭" },
+  { title: "포스(노트북) 메뉴 셋팅" },
+  { title: "커피머신/온수기 켜기" },
+  { title: "흑당펄 준비(오픈 1시간전)", isImportant: true },
+  { title: "크림슈 반죽 준비(제조 또는 해동)" },
+  { title: "오븐 예열(오픈 40분전)", isImportant: true },
+  { title: "사고펄 준비(오픈 30분전)", isImportant: true },
+  { title: "건조대 물건 정리" },
+  { title: "아이스크림 머신 조립" },
+  { title: "커피 그라인더 조립 및 호퍼 채우기" },
+  { title: "샷 테스트 추출 및 셋팅(분쇄도 조정)" },
+  { title: "재료 준비" },
+  { title: "아이스크림 머신 재료 채우기" },
+  { title: "영업 공간 청결 상태 확인/청소" },
+];
 const absenceTypeOptions = [
   { value: "approved", label: "협의 결근" },
   { value: "unexcused", label: "무단 결근" },
@@ -615,10 +633,15 @@ function normalizeAlarmSoundReferences(alarms, alarmSounds, defaultSoundId) {
 
 function normalizeOperations(operations, fallbackOperations) {
   const fallback = fallbackOperations || makeDefaultOperations();
+  const checklistTasks = Array.isArray(operations?.checklistTasks)
+    ? operations.checklistTasks.map((task, index) => normalizeChecklistTask(task, index))
+    : fallback.checklistTasks;
   return {
-    checklistTasks: Array.isArray(operations?.checklistTasks)
-      ? operations.checklistTasks.map((task, index) => normalizeChecklistTask(task, index))
-      : fallback.checklistTasks,
+    checklistTemplateVersion: CHECKLIST_TEMPLATE_VERSION,
+    checklistTasks:
+      operations?.checklistTemplateVersion === CHECKLIST_TEMPLATE_VERSION
+        ? checklistTasks
+        : applyDefaultOpenChecklistTemplate(checklistTasks),
     checklistRecords: Array.isArray(operations?.checklistRecords)
       ? operations.checklistRecords.map(normalizeChecklistRecord)
       : fallback.checklistRecords,
@@ -643,10 +666,23 @@ function normalizeChecklistTask(task, index = 0) {
     section: task?.section === "close" ? "close" : "open",
     title: task?.title || "체크 항목",
     isActive: task?.isActive !== false,
+    isImportant: Boolean(task?.isImportant),
     sortOrder: Number.isFinite(Number(task?.sortOrder)) ? Number(task.sortOrder) : index + 1,
     createdAt: task?.createdAt || nowIso(),
     updatedAt: task?.updatedAt || task?.createdAt || nowIso(),
   };
+}
+
+function applyDefaultOpenChecklistTemplate(tasks = []) {
+  const createdAt = nowIso();
+  const closeTasks = tasks.filter((task) => task.section === "close");
+  const openTasks = defaultOpenChecklistTasks.map((task, index) =>
+    makeChecklistTask(`open_20260627_${index + 1}`, "open", task.title, index + 1, createdAt, {
+      isImportant: Boolean(task.isImportant),
+    }),
+  );
+  reorderChecklistSection("close", closeTasks);
+  return [...openTasks, ...closeTasks];
 }
 
 function normalizeChecklistRecord(record) {
@@ -1668,14 +1704,6 @@ function makeServiceManual(id, category, title, situation, response, caution, ke
 }
 
 function makeDefaultOperations(createdAt = nowIso()) {
-  const openTasks = [
-    "매장 조명과 음악 켜기",
-    "POS/결제기 정상 작동 확인",
-    "냉장고/냉동고 온도 확인",
-    "제빙기와 얼음 상태 확인",
-    "오늘 필요한 재료 제조량 확인",
-    "영업 공간 청결 상태 확인",
-  ];
   const closeTasks = [
     "제조 도구 세척 및 건조",
     "재료 보관 상태 확인",
@@ -1686,11 +1714,16 @@ function makeDefaultOperations(createdAt = nowIso()) {
   ];
 
   const checklistTasks = [
-    ...openTasks.map((title, index) => makeChecklistTask(`open_${index + 1}`, "open", title, index + 1, createdAt)),
+    ...defaultOpenChecklistTasks.map((task, index) =>
+      makeChecklistTask(`open_20260627_${index + 1}`, "open", task.title, index + 1, createdAt, {
+        isImportant: Boolean(task.isImportant),
+      }),
+    ),
     ...closeTasks.map((title, index) => makeChecklistTask(`close_${index + 1}`, "close", title, index + 1, createdAt)),
   ];
 
   return {
+    checklistTemplateVersion: CHECKLIST_TEMPLATE_VERSION,
     checklistTasks,
     checklistRecords: [],
     handoverNotes: [],
@@ -1700,13 +1733,14 @@ function makeDefaultOperations(createdAt = nowIso()) {
   };
 }
 
-function makeChecklistTask(id, section, title, sortOrder, createdAt = nowIso()) {
+function makeChecklistTask(id, section, title, sortOrder, createdAt = nowIso(), options = {}) {
   return {
     id,
     section,
     title,
     sortOrder,
     isActive: true,
+    isImportant: Boolean(options.isImportant),
     createdAt,
     updatedAt: createdAt,
   };
@@ -3523,7 +3557,7 @@ function renderChecklistSection(sectionStat, date) {
                 .map((task) => {
                   const record = getChecklistRecord(date, task.id);
                   return `
-                    <label class="checklist-item ${record?.checked ? "is-checked" : ""}">
+                    <label class="checklist-item ${record?.checked ? "is-checked" : ""} ${task.isImportant ? "is-important" : ""}">
                       <input type="checkbox" data-check-task="${task.id}" ${record?.checked ? "checked" : ""} />
                       <span>${escapeHtml(task.title)}</span>
                       <small>${record?.checkedAt ? `${timeText(record.checkedAt)} · ${escapeHtml(record.checkedBy || "직원")}` : "미완료"}</small>
@@ -4132,6 +4166,10 @@ function renderOperationChecksAdmin(container) {
                     <input id="checkTaskActive" type="checkbox" ${task.isActive ? "checked" : ""} />
                     직원 화면에 표시
                   </label>
+                  <label class="check-field">
+                    <input id="checkTaskImportant" type="checkbox" ${task.isImportant ? "checked" : ""} />
+                    중요 항목 빨간 강조
+                  </label>
                 </div>
                 <div class="alarm-action-row">
                   <button class="button button--danger" id="deleteCheckTask" type="button">삭제</button>
@@ -4261,7 +4299,7 @@ function renderChecklistTaskAdminSection(section) {
                   (item) => `
                     <button class="list-button list-button--draggable ops-task-button ${item.id === state.selectedChecklistTaskId ? "is-active" : ""} ${item.isActive ? "" : "is-inactive"}" type="button" draggable="true" data-select-check-task="${item.id}" data-check-task-drag="${item.id}" title="드래그해서 순서 변경">
                       <strong>${escapeHtml(item.title)}</strong>
-                      <span>${item.isActive ? "표시" : "숨김"}</span>
+                      <span class="${item.isActive && item.isImportant ? "is-important" : ""}">${item.isActive ? (item.isImportant ? "중요" : "표시") : "숨김"}</span>
                     </button>
                   `,
                 )
@@ -4380,6 +4418,7 @@ function saveChecklistTaskAdmin(container) {
   const nextSection = container.querySelector("#checkTaskSection")?.value === "close" ? "close" : "open";
   task.title = title;
   task.isActive = Boolean(container.querySelector("#checkTaskActive")?.checked);
+  task.isImportant = Boolean(container.querySelector("#checkTaskImportant")?.checked);
   task.section = nextSection;
   task.updatedAt = nowIso();
   if (originalSection !== nextSection) {

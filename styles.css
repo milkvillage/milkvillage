@@ -1625,6 +1625,11 @@ th {
   font-weight: 900;
 }
 
+.ops-task-button span.is-important {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
 .ops-task-button.is-inactive {
   opacity: 0.62;
 }
@@ -1958,6 +1963,16 @@ th {
   font-weight: 900;
 }
 
+.checklist-item.is-important {
+  border-color: #f5a3a3;
+  background: #fff5f5;
+  box-shadow: inset 5px 0 0 var(--red);
+}
+
+.checklist-item.is-important span {
+  color: var(--red);
+}
+
 .checklist-item small {
   color: var(--muted);
   font-weight: 850;
@@ -1967,6 +1982,11 @@ th {
 .checklist-item.is-checked {
   background: var(--green-soft);
   border-color: #9dd9af;
+}
+
+.checklist-item.is-checked.is-important {
+  background: #fff7ed;
+  border-color: #f5a3a3;
 }
 
 .handover-form {
