@@ -3734,6 +3734,42 @@ function renderAdminPin() {
   input.focus();
 }
 
+function renderChecklistSummaryCard(sectionStat, date) {
+  const rows = sectionStat.tasks
+    .map((task) => {
+      const record = getChecklistRecord(date, task.id);
+      const isDone = Boolean(record?.checked);
+      const checkedAt = record?.checkedAt || record?.updatedAt || "";
+      return `
+        <li class="check-summary-row ${isDone ? "is-done" : "is-pending"} ${task.isImportant ? "is-important" : ""}">
+          <span class="check-summary-title">${escapeHtml(task.title)}</span>
+          <span class="check-summary-meta">
+            ${
+              isDone
+                ? `<strong>${escapeHtml(record.checkedBy || "직원")}</strong>${checkedAt ? `<small>${timeText(checkedAt)}</small>` : ""}`
+                : `<strong>미완료</strong>`
+            }
+          </span>
+        </li>
+      `;
+    })
+    .join("");
+
+  return `
+    <section class="admin-card summary-check-card">
+      <div class="summary-check-heading">
+        <h3>${sectionStat.label} 체크</h3>
+        <span>${sectionStat.done}/${sectionStat.total} 완료</span>
+      </div>
+      ${
+        sectionStat.tasks.length
+          ? `<ul class="check-summary-list">${rows}</ul>`
+          : `<div class="empty-state">${sectionStat.label} 체크 항목이 없습니다.</div>`
+      }
+    </section>
+  `;
+}
+
 function renderManagerSummaryAdmin(container) {
   const today = todayDateKey();
   const checklistStats = getChecklistStats(today);
@@ -3742,11 +3778,6 @@ function renderManagerSummaryAdmin(container) {
   const lowSupplies = getOrderNeededSupplies();
   const openAlarms = getOpenAlarmEventsToday();
   const todayBatches = getTodayPrepBatches(false);
-  const pendingTasks = checklistStats.sections.flatMap((section) =>
-    section.tasks
-      .filter((task) => !isChecklistTaskChecked(today, task.id))
-      .map((task) => ({ ...task, sectionLabel: section.label })),
-  );
 
   container.innerHTML = `
     <div class="admin-card">
@@ -3780,19 +3811,10 @@ function renderManagerSummaryAdmin(container) {
     </div>
 
     <div class="summary-columns">
-      <section class="admin-card">
-        <h3>미완료 체크</h3>
-        ${
-          pendingTasks.length
-            ? `<ul class="compact-list">
-                ${pendingTasks
-                  .map((task) => `<li><strong>${task.sectionLabel}</strong><span>${escapeHtml(task.title)}</span></li>`)
-                  .join("")}
-              </ul>`
-            : `<div class="empty-state">오늘 체크가 모두 완료되었습니다.</div>`
-        }
-      </section>
+      ${checklistStats.sections.map((section) => renderChecklistSummaryCard(section, today)).join("")}
+    </div>
 
+    <div class="summary-columns">
       <section class="admin-card">
         <h3>최근 인수인계</h3>
         ${
@@ -3817,9 +3839,7 @@ function renderManagerSummaryAdmin(container) {
             : `<div class="empty-state">최근 인수인계가 없습니다.</div>`
         }
       </section>
-    </div>
 
-    <div class="summary-columns">
       <section class="admin-card">
         <h3>발주 필요 품목</h3>
         ${
@@ -3839,7 +3859,9 @@ function renderManagerSummaryAdmin(container) {
             : `<div class="empty-state">현재 발주가 필요한 품목이 없습니다.</div>`
         }
       </section>
+    </div>
 
+    <div class="summary-columns summary-columns--single">
       <section class="admin-card">
         <h3>오늘 제조 기록</h3>
         ${
