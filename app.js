@@ -2930,11 +2930,11 @@ function renderAttendanceScreen() {
             <div class="attendance-time-grid">
               <label class="field">
                 <span>예정 시작</span>
-                ${renderTimeSelect({ id: "attendanceScheduledStart" }, timingValues.scheduledStart, "예정 시작")}
+                ${renderTimeSelect({ id: "attendanceScheduledStart", disabled: "disabled" }, timingValues.scheduledStart, "예정 시작")}
               </label>
               <label class="field">
                 <span>예정 종료</span>
-                ${renderTimeSelect({ id: "attendanceScheduledEnd" }, timingValues.scheduledEnd, "예정 종료")}
+                ${renderTimeSelect({ id: "attendanceScheduledEnd", disabled: "disabled" }, timingValues.scheduledEnd, "예정 종료")}
               </label>
               <label class="field">
                 <span>실제 출근</span>
