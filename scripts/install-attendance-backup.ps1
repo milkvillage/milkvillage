@@ -1,5 +1,5 @@
 param(
-  [string]$TaskName = "MilkVillageAttendanceQuarterlyBackup",
+  [string]$TaskName = "MilkVillageAttendanceAutoBackup",
   [string]$At = "03:10"
 )
 
@@ -26,7 +26,7 @@ Register-ScheduledTask `
   -Action $Action `
   -Trigger $Trigger `
   -Principal $Principal `
-  -Description "Back up Milk Village attendance records to C:\milk village\03_attendance_backups. The script runs daily and writes one backup per quarter." `
+  -Description "Back up Milk Village attendance records to C:\milk village\03_attendance_backups. The script runs daily, writes monthly PDFs, and prunes detailed records older than 3 months after backup." `
   -Force | Out-Null
 
-Write-Host "Installed scheduled task '$TaskName'. It checks daily at $At and writes one backup per quarter."
+Write-Host "Installed scheduled task '$TaskName'. It checks daily at $At, writes monthly PDFs, and prunes detailed records older than 3 months after backup."
