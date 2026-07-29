@@ -4163,6 +4163,15 @@ function renderServiceManualsAdmin(container) {
           <h3>응대 항목</h3>
           <button class="button button--ghost button--small" id="addServiceManual" type="button">추가</button>
         </div>
+        <div class="manual-category-create-card">
+          <label class="field">
+            <span>새 카테고리</span>
+            <div class="manual-category-create-row">
+              <input id="newServiceManualCategory" type="text" placeholder="예: 인사, 포장, 클레임" autocomplete="off" />
+              <button class="button button--primary button--small" id="createServiceManualCategory" type="button">만들기</button>
+            </div>
+          </label>
+        </div>
         <div class="list-stack manual-admin-list-stack">
           ${
             manuals.length
@@ -4240,6 +4249,10 @@ function renderServiceManualsAdmin(container) {
   setupServiceManualDragSorting(container);
   setupServiceManualCategoryPicker(container);
   container.querySelector("#addServiceManual")?.addEventListener("click", () => addServiceManual(container));
+  container.querySelector("#createServiceManualCategory")?.addEventListener("click", () => createServiceManualCategory(container));
+  container.querySelector("#newServiceManualCategory")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") createServiceManualCategory(container);
+  });
   container.querySelector("#saveServiceManual")?.addEventListener("click", () => saveServiceManualAdmin(container));
   container.querySelector("#deleteServiceManual")?.addEventListener("click", deleteServiceManualAdmin);
 }
@@ -4298,13 +4311,12 @@ function applyServiceManualAdminValues(container) {
   return true;
 }
 
-function addServiceManual(container) {
-  if (!applyServiceManualAdminValues(container)) return;
+function makeEmptyServiceManual(category) {
   const createdAt = nowIso();
-  const manual = normalizeServiceManual(
+  return normalizeServiceManual(
     {
       id: uid("service_manual"),
-      category: getServiceManualCategories(getServiceManualsForAdmin())[0] || "기본 응대",
+      category: category || "기본 응대",
       title: "새 상황",
       situation: "",
       response: "",
@@ -4318,6 +4330,43 @@ function addServiceManual(container) {
     },
     getServiceManualsForAdmin().length,
   );
+}
+
+function createServiceManualCategory(container) {
+  const input = container.querySelector("#newServiceManualCategory");
+  const category = input?.value.trim() || "";
+  if (!category) {
+    input?.focus();
+    return;
+  }
+
+  const manuals = getServiceManualsForAdmin();
+  const existingManual = manuals.find((manual) => (manual.category || "").trim() === category);
+  if (existingManual) {
+    state.selectedAdminManualId = existingManual.id;
+    state.savedMessage = `${category} 카테고리는 이미 있습니다.`;
+    renderAdminScreen();
+    return;
+  }
+
+  const currentManual = getServiceManual(state.selectedAdminManualId);
+  if (currentManual) applyServiceManualAdminValues(container);
+
+  const manual = makeEmptyServiceManual(category);
+  db.operations.serviceManuals.push(manual);
+  state.selectedAdminManualId = manual.id;
+  state.savedMessage = `${category} 카테고리를 만들었습니다. 상황과 대사를 입력한 뒤 저장해주세요.`;
+  saveDb();
+  renderAdminScreen();
+}
+
+function addServiceManual(container) {
+  if (!applyServiceManualAdminValues(container)) return;
+  const category =
+    container.querySelector("#serviceManualCategory")?.value.trim() ||
+    getServiceManualCategories(getServiceManualsForAdmin())[0] ||
+    "기본 응대";
+  const manual = makeEmptyServiceManual(category);
   db.operations.serviceManuals.push(manual);
   state.selectedAdminManualId = manual.id;
   state.savedMessage = "응대 메뉴얼을 추가했습니다.";

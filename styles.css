@@ -1480,6 +1480,21 @@ th {
   margin-bottom: 12px;
 }
 
+.manual-category-create-card {
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.manual-category-create-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
 .manual-admin-list-button {
   display: grid;
   gap: 4px;
