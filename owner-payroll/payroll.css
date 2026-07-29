@@ -575,6 +575,12 @@ h3 {
   font-weight: 1000;
 }
 
+.allowance-deferred {
+  display: block;
+  color: var(--warn);
+  font-weight: 1000;
+}
+
 .print-area {
   display: none;
 }
