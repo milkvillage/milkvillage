@@ -2,9 +2,9 @@ const STORAGE_KEY = "milk-village-mvp-v1";
 const REMOTE_API_BASE_URL = window.MILK_VILLAGE_API_BASE_URL || "";
 const REMOTE_STATE_ID = "main";
 const ENABLE_REALTIME_SYNC = false;
-const REMOTE_POLL_INTERVAL_MS = 5 * 60 * 1000;
-const REMOTE_POLL_HIDDEN_INTERVAL_MS = 15 * 60 * 1000;
-const REMOTE_SAVE_DEBOUNCE_MS = 5000;
+const REMOTE_POLL_INTERVAL_MS = 30 * 60 * 1000;
+const REMOTE_POLL_HIDDEN_INTERVAL_MS = 60 * 60 * 1000;
+const REMOTE_SAVE_DEBOUNCE_MS = 30 * 1000;
 const CHECKLIST_TEMPLATE_VERSION = "20260627-open-checklist-v1";
 const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const alarmDayOrder = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
@@ -66,7 +66,7 @@ const LOG_RETENTION_DAYS = {
   operationRecords: 180,
 };
 const ADMIN_UNLOCK_DURATION_MS = 10 * 60 * 1000;
-const VERSION_CHECK_INTERVAL_MS = 2 * 60 * 1000;
+const VERSION_CHECK_INTERVAL_MS = 30 * 60 * 1000;
 const ALARM_HISTORY_LIMIT = 8;
 const ALARM_SOUND_PUBLIC_BASE_URL = makeRemoteApiUrl("/sounds");
 const DEFAULT_ALARM_SOUND_ID = "sound_supplies_check";
