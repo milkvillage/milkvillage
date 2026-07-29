@@ -97,7 +97,10 @@ async function fetchRemoteJson(path, options = {}) {
   const text = await response.text();
   const data = text ? JSON.parse(text) : null;
   if (!response.ok) {
-    throw new Error(data?.message || data?.error || `remote request failed: ${response.status}`);
+    const error = new Error(data?.message || data?.error || `remote request failed: ${response.status}`);
+    error.status = response.status;
+    error.data = data;
+    throw error;
   }
   return data;
 }
@@ -178,10 +181,10 @@ function expireIfNeeded() {
 
 async function fetchRemoteState() {
   if (!remoteApiBaseUrl) {
-    setStatus("DB 설정 없음", "error");
+    setStatus("Cloudflare 설정 없음", "error");
     return;
   }
-  setStatus("불러오는 중", "");
+  setStatus("Cloudflare 불러오는 중", "");
   try {
     const row = await fetchRemoteJson(`/state/${encodeURIComponent(REMOTE_STATE_ID)}`);
     const remoteData = row?.data || {};
@@ -191,12 +194,19 @@ async function fetchRemoteState() {
     state.remoteUpdatedAt = row?.updated_at || "";
     ensureStaffSettings();
     saveSettings();
-    setStatus("연결됨", "online");
+    setStatus("Cloudflare 연결됨", "online");
     render();
   } catch (error) {
     console.error(error);
-    setStatus("DB 실패", "error");
-    els.remoteUpdatedText.textContent = "Cloudflare DB 설정 또는 네트워크 문제로 근퇴기록을 불러오지 못했습니다.";
+    if (error.status === 404) {
+      setStatus("서버 데이터 없음", "error");
+      els.remoteUpdatedText.textContent =
+        "Cloudflare에 아직 근퇴 데이터가 없습니다. 태블릿 메인 앱에서 Cloudflare 첫 저장 완료가 뜬 뒤 다시 불러오세요.";
+      render();
+      return;
+    }
+    setStatus("Cloudflare 실패", "error");
+    els.remoteUpdatedText.textContent = "Cloudflare 설정 또는 네트워크 문제로 근퇴기록을 불러오지 못했습니다.";
   }
 }
 
