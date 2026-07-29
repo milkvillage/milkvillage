@@ -1,4 +1,4 @@
-const CACHE_NAME = "milk-village-pwa-v5";
+const CACHE_NAME = "milk-village-pwa-v6";
 const APP_SHELL = ["./", "./index.html", "./remote-config.js", "./manifest.webmanifest", "./app-icon.svg"];
 
 self.addEventListener("install", (event) => {

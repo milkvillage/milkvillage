@@ -260,8 +260,38 @@ function normalizeAttendanceRecords(records) {
     breakMinutes: normalizeBreakMinutes(record?.breakMinutes),
     employeeSignature: record?.employeeSignature || "",
     managerSignature: record?.managerSignature || "",
+    employeeSignatureStrokes: normalizeSignatureStrokes(record?.employeeSignatureStrokes),
+    managerSignatureStrokes: normalizeSignatureStrokes(record?.managerSignatureStrokes),
     adjustmentReason: record?.adjustmentReason || "",
   }));
+}
+
+function normalizeSignatureStrokes(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((stroke) =>
+      (Array.isArray(stroke) ? stroke : [])
+        .map((point) => {
+          const x = Number(point?.[0]);
+          const y = Number(point?.[1]);
+          if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+          return [Math.min(1, Math.max(0, Number(x.toFixed(4)))), Math.min(1, Math.max(0, Number(y.toFixed(4))))];
+        })
+        .filter(Boolean),
+    )
+    .filter((stroke) => stroke.length);
+}
+
+function hasSignatureStrokes(value) {
+  return normalizeSignatureStrokes(value).length > 0;
+}
+
+function hasEmployeeSignature(record) {
+  return Boolean(record?.employeeSignature) || hasSignatureStrokes(record?.employeeSignatureStrokes);
+}
+
+function hasManagerSignature(record) {
+  return Boolean(record?.managerSignature) || hasSignatureStrokes(record?.managerSignatureStrokes);
 }
 
 function ensureStaffSettings() {
@@ -424,7 +454,7 @@ function calculatePayroll(staff) {
   const grossPay = basePay + weeklyAllowancePay;
   const withholdingAmount = setting.withholding ? Math.floor(grossPay * WITHHOLDING_RATE) : 0;
   const netPay = grossPay - withholdingAmount;
-  const unconfirmedCount = presentRecords.filter((record) => !(record.employeeSignature && record.managerSignature)).length;
+  const unconfirmedCount = presentRecords.filter((record) => !(hasEmployeeSignature(record) && hasManagerSignature(record))).length;
   return {
     staff,
     setting,
@@ -494,8 +524,8 @@ function formatAttendanceRecordStatus(record) {
 
 function isAttendanceRecordConfirmed(record) {
   if (!record) return false;
-  if (isAttendanceWorkStatus(record.status)) return Boolean(record.employeeSignature && record.managerSignature);
-  return Boolean(record.employeeSignature);
+  if (isAttendanceWorkStatus(record.status)) return hasEmployeeSignature(record) && hasManagerSignature(record);
+  return hasEmployeeSignature(record);
 }
 
 function formatAttendanceRecordNote(record, confirmText = "") {

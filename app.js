@@ -799,6 +799,8 @@ function normalizeAttendanceRecord(record) {
     absenceType: status === "absent" ? normalizeAbsenceType(record?.absenceType) : "",
     employeeSignature: record?.employeeSignature || "",
     managerSignature: record?.managerSignature || "",
+    employeeSignatureStrokes: normalizeSignatureStrokes(record?.employeeSignatureStrokes),
+    managerSignatureStrokes: normalizeSignatureStrokes(record?.managerSignatureStrokes),
     scheduledStart: normalizeTimeValue(record?.scheduledStart),
     scheduledEnd: normalizeTimeValue(record?.scheduledEnd),
     actualStart: normalizeTimeValue(record?.actualStart),
@@ -2862,9 +2864,9 @@ function renderAttendanceScreen() {
   const selectedDate = getSelectedAttendanceDate();
   const selectedRecord = selectedStaff ? getAttendanceRecord(selectedDate, selectedStaff.id) : null;
   const timingValues = getAttendanceTimingValues(selectedStaff, selectedDate, selectedRecord);
-  const employeeSignatureLocked = Boolean(selectedRecord?.employeeSignature);
+  const employeeSignatureLocked = hasEmployeeSignature(selectedRecord);
   const managerCanSign = Boolean(
-    isAttendanceWorkStatus(selectedRecord?.status) && selectedRecord.employeeSignature && !selectedRecord.managerSignature,
+    isAttendanceWorkStatus(selectedRecord?.status) && hasEmployeeSignature(selectedRecord) && !hasManagerSignature(selectedRecord),
   );
   const managerSignatureLocked = !managerCanSign;
   const attendanceDraftKey = selectedStaff ? getAttendanceDraftKey(selectedDate, selectedStaff.id) : "";
@@ -3010,10 +3012,10 @@ function renderAttendanceScreen() {
     state.selectedAttendanceStaffId = staffSelect.value || null;
     renderAttendanceScreen();
   });
-  setupSignaturePad(els.workArea.querySelector("#employeeSignaturePad"), selectedRecord?.employeeSignature || "", {
+  setupSignaturePad(els.workArea.querySelector("#employeeSignaturePad"), getAttendanceSignaturePayload(selectedRecord, "employee"), {
     locked: employeeSignatureLocked,
   });
-  setupSignaturePad(els.workArea.querySelector("#managerSignaturePad"), selectedRecord?.managerSignature || "", {
+  setupSignaturePad(els.workArea.querySelector("#managerSignaturePad"), getAttendanceSignaturePayload(selectedRecord, "manager"), {
     locked: managerSignatureLocked,
     requirePin: managerCanSign,
     pinPrompt: "매니저 서명을 입력하려면 관리자 PIN을 입력해주세요.",
@@ -3095,8 +3097,8 @@ function buildAttendanceDraft(status, container) {
     alert("근무자 이름을 먼저 선택해주세요.");
     return null;
   }
-  const employeeSignature = getSignaturePadData(container.querySelector("#employeeSignaturePad"));
-  if (!employeeSignature) {
+  const employeeSignature = getSignaturePadPayload(container.querySelector("#employeeSignaturePad"));
+  if (!hasSignaturePayload(employeeSignature)) {
     alert("근무자 서명을 손가락으로 입력해주세요.");
     return null;
   }
@@ -3119,7 +3121,8 @@ function buildAttendanceDraft(status, container) {
     staffName: staff.name,
     status: normalizedStatus,
     absenceType: normalizedStatus === "absent" ? absenceType : "",
-    employeeSignature,
+    employeeSignature: employeeSignature.image,
+    employeeSignatureStrokes: employeeSignature.strokes,
     scheduledStart,
     scheduledEnd,
     actualStart: isAttendanceWorkStatus(normalizedStatus) ? actualStart : "",
@@ -3230,6 +3233,8 @@ function saveAttendanceRecord(draft) {
       absenceType: "",
       employeeSignature: "",
       managerSignature: "",
+      employeeSignatureStrokes: [],
+      managerSignatureStrokes: [],
       scheduledStart: "",
       scheduledEnd: "",
       actualStart: "",
@@ -3244,8 +3249,12 @@ function saveAttendanceRecord(draft) {
   record.staffName = draft.staffName;
   record.status = draft.status;
   record.absenceType = draft.status === "absent" ? normalizeAbsenceType(draft.absenceType) : "";
-  record.employeeSignature = draft.employeeSignature;
-  if (!isAttendanceWorkStatus(record.status)) record.managerSignature = "";
+  record.employeeSignature = draft.employeeSignature || "";
+  record.employeeSignatureStrokes = normalizeSignatureStrokes(draft.employeeSignatureStrokes);
+  if (!isAttendanceWorkStatus(record.status)) {
+    record.managerSignature = "";
+    record.managerSignatureStrokes = [];
+  }
   record.scheduledStart = draft.scheduledStart;
   record.scheduledEnd = draft.scheduledEnd;
   record.actualStart = draft.actualStart;
@@ -3269,8 +3278,8 @@ function confirmManagerAttendance(container) {
     alert("출근 또는 지각 기록을 먼저 저장해주세요.");
     return;
   }
-  const managerSignature = getSignaturePadData(container.querySelector("#managerSignaturePad"));
-  if (!managerSignature) {
+  const managerSignature = getSignaturePadPayload(container.querySelector("#managerSignaturePad"));
+  if (!hasSignaturePayload(managerSignature)) {
     alert("매니저 서명을 입력한 뒤 확인해주세요.");
     return;
   }
@@ -3287,7 +3296,8 @@ function confirmManagerAttendance(container) {
     actualEnd: record.actualEnd,
     breakMinutes: record.breakMinutes,
     adjustmentReason: record.adjustmentReason,
-    managerSignature,
+    managerSignature: managerSignature.image,
+    managerSignatureStrokes: managerSignature.strokes,
   });
 }
 
@@ -3300,7 +3310,8 @@ function saveManagerAttendance(draft) {
     return;
   }
   record.staffName = draft.staffName;
-  record.managerSignature = draft.managerSignature;
+  record.managerSignature = draft.managerSignature || "";
+  record.managerSignatureStrokes = normalizeSignatureStrokes(draft.managerSignatureStrokes);
   record.updatedAt = nowIso();
   saveDb();
   renderAttendanceScreen();
@@ -3395,7 +3406,7 @@ function renderAttendanceCalendarChip(record) {
 }
 
 function isSignedPresentRecord(record) {
-  return isAttendanceWorkStatus(record?.status) && Boolean(record.employeeSignature) && Boolean(record.managerSignature);
+  return isAttendanceWorkStatus(record?.status) && hasEmployeeSignature(record) && hasManagerSignature(record);
 }
 
 function attendanceRecordStateClass(record) {
@@ -3511,10 +3522,87 @@ function isSignatureImage(value) {
   return typeof value === "string" && value.startsWith("data:image/");
 }
 
+function normalizeSignatureStrokes(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((stroke) =>
+      (Array.isArray(stroke) ? stroke : [])
+        .map((point) => {
+          const x = Number(point?.[0]);
+          const y = Number(point?.[1]);
+          if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+          return [Math.min(1, Math.max(0, Number(x.toFixed(4)))), Math.min(1, Math.max(0, Number(y.toFixed(4))))];
+        })
+        .filter(Boolean),
+    )
+    .filter((stroke) => stroke.length);
+}
+
+function hasSignatureStrokes(value) {
+  return normalizeSignatureStrokes(value).length > 0;
+}
+
+function hasEmployeeSignature(record) {
+  return Boolean(record?.employeeSignature) || hasSignatureStrokes(record?.employeeSignatureStrokes);
+}
+
+function hasManagerSignature(record) {
+  return Boolean(record?.managerSignature) || hasSignatureStrokes(record?.managerSignatureStrokes);
+}
+
+function getAttendanceSignaturePayload(record, role) {
+  if (!record) return { image: "", strokes: [] };
+  return {
+    image: record[`${role}Signature`] || "",
+    strokes: normalizeSignatureStrokes(record[`${role}SignatureStrokes`]),
+  };
+}
+
+function hasSignaturePayload(payload) {
+  return Boolean(payload?.image) || hasSignatureStrokes(payload?.strokes);
+}
+
+function drawSignatureStrokes(context, strokes, width, height) {
+  normalizeSignatureStrokes(strokes).forEach((stroke) => {
+    if (!stroke.length) return;
+    context.beginPath();
+    stroke.forEach(([x, y], index) => {
+      const pointX = x * width;
+      const pointY = y * height;
+      if (index === 0) {
+        context.moveTo(pointX, pointY);
+        if (stroke.length === 1) context.lineTo(pointX + 0.1, pointY + 0.1);
+      } else {
+        context.lineTo(pointX, pointY);
+      }
+    });
+    context.stroke();
+    context.closePath();
+  });
+}
+
+function getCanvasSignatureStrokes(canvas) {
+  try {
+    return normalizeSignatureStrokes(JSON.parse(canvas?.dataset?.signatureStrokes || "[]"));
+  } catch {
+    return [];
+  }
+}
+
 function setupSignaturePad(canvas, initialData = "", options = {}) {
   if (!canvas) return;
   const locked = Boolean(options.locked);
   const requirePin = Boolean(options.requirePin);
+  const initialSignature =
+    typeof initialData === "object" && initialData !== null
+      ? {
+          image: initialData.image || "",
+          strokes: normalizeSignatureStrokes(initialData.strokes),
+        }
+      : {
+          image: initialData || "",
+          strokes: [],
+        };
   const context = canvas.getContext("2d");
   const ratio = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
@@ -3530,6 +3618,7 @@ function setupSignaturePad(canvas, initialData = "", options = {}) {
   context.clearRect(0, 0, width, height);
   canvas.dataset.hasSignature = "0";
   canvas.dataset.initialSignature = "";
+  canvas.dataset.signatureStrokes = "[]";
   canvas.dataset.signatureDirty = "0";
   canvas.dataset.signatureLoaded = "0";
   canvas.dataset.locked = locked ? "1" : "0";
@@ -3537,9 +3626,14 @@ function setupSignaturePad(canvas, initialData = "", options = {}) {
   canvas.dataset.pinAuthorized = requirePin ? "0" : "1";
   canvas.classList.toggle("is-locked", locked);
 
-  if (isSignatureImage(initialData)) {
+  if (initialSignature.strokes.length) {
     canvas.dataset.hasSignature = "1";
-    canvas.dataset.initialSignature = initialData;
+    canvas.dataset.signatureStrokes = JSON.stringify(initialSignature.strokes);
+    drawSignatureStrokes(context, initialSignature.strokes, width, height);
+    canvas.dataset.signatureLoaded = "1";
+  } else if (isSignatureImage(initialSignature.image)) {
+    canvas.dataset.hasSignature = "1";
+    canvas.dataset.initialSignature = initialSignature.image;
     const image = new Image();
     image.onload = () => {
       if (canvas.dataset.signatureDirty === "1") return;
@@ -3548,18 +3642,30 @@ function setupSignaturePad(canvas, initialData = "", options = {}) {
       canvas.dataset.hasSignature = "1";
       canvas.dataset.signatureLoaded = "1";
     };
-    image.src = initialData;
+    image.src = initialSignature.image;
+  } else if (initialSignature.image) {
+    canvas.dataset.hasSignature = "1";
+    canvas.dataset.initialSignature = initialSignature.image;
   }
 
   if (locked) return;
 
   let isDrawing = false;
+  let strokes = normalizeSignatureStrokes(initialSignature.strokes);
+  let currentStroke = null;
   const getPoint = (event) => {
     const box = canvas.getBoundingClientRect();
     return {
       x: event.clientX - box.left,
       y: event.clientY - box.top,
     };
+  };
+  const toSignaturePoint = (point) => [
+    Math.min(1, Math.max(0, Number((point.x / width).toFixed(4)))),
+    Math.min(1, Math.max(0, Number((point.y / height).toFixed(4)))),
+  ];
+  const syncSignatureStrokes = () => {
+    canvas.dataset.signatureStrokes = JSON.stringify(normalizeSignatureStrokes(strokes));
   };
   const startDrawing = (event) => {
     event.preventDefault();
@@ -3574,10 +3680,14 @@ function setupSignaturePad(canvas, initialData = "", options = {}) {
     }
     const point = getPoint(event);
     isDrawing = true;
+    strokes = getCanvasSignatureStrokes(canvas);
     canvas.dataset.hasSignature = "1";
     canvas.dataset.initialSignature = "";
     canvas.dataset.signatureDirty = "1";
     canvas.setPointerCapture?.(event.pointerId);
+    currentStroke = [toSignaturePoint(point)];
+    strokes.push(currentStroke);
+    syncSignatureStrokes();
     context.beginPath();
     context.moveTo(point.x, point.y);
   };
@@ -3585,6 +3695,12 @@ function setupSignaturePad(canvas, initialData = "", options = {}) {
     if (!isDrawing) return;
     event.preventDefault();
     const point = getPoint(event);
+    const normalizedPoint = toSignaturePoint(point);
+    const previousPoint = currentStroke?.[currentStroke.length - 1];
+    if (!previousPoint || Math.abs(previousPoint[0] - normalizedPoint[0]) + Math.abs(previousPoint[1] - normalizedPoint[1]) > 0.003) {
+      currentStroke?.push(normalizedPoint);
+      syncSignatureStrokes();
+    }
     context.lineTo(point.x, point.y);
     context.stroke();
   };
@@ -3592,6 +3708,8 @@ function setupSignaturePad(canvas, initialData = "", options = {}) {
     if (!isDrawing) return;
     event.preventDefault();
     isDrawing = false;
+    currentStroke = null;
+    syncSignatureStrokes();
     context.closePath();
     canvas.releasePointerCapture?.(event.pointerId);
   };
@@ -3610,6 +3728,7 @@ function clearSignaturePad(canvas) {
   context.clearRect(0, 0, rect.width, rect.height);
   canvas.dataset.hasSignature = "0";
   canvas.dataset.initialSignature = "";
+  canvas.dataset.signatureStrokes = "[]";
   canvas.dataset.signatureDirty = "1";
   canvas.dataset.signatureLoaded = "0";
 }
@@ -3636,12 +3755,17 @@ function handleSignatureClearRequest(button, canvas) {
   }, 2400);
 }
 
-function getSignaturePadData(canvas) {
-  if (!canvas || canvas.dataset.hasSignature !== "1") return "";
+function getSignaturePadPayload(canvas) {
+  if (!canvas || canvas.dataset.hasSignature !== "1") return { image: "", strokes: [] };
+  const strokes = getCanvasSignatureStrokes(canvas);
+  if (strokes.length) return { image: "", strokes };
   if (canvas.dataset.initialSignature && canvas.dataset.signatureDirty !== "1" && canvas.dataset.signatureLoaded !== "1") {
-    return canvas.dataset.initialSignature;
+    return { image: canvas.dataset.initialSignature, strokes: [] };
   }
-  return canvas.toDataURL("image/png");
+  if (canvas.dataset.initialSignature && canvas.dataset.signatureDirty !== "1") {
+    return { image: canvas.dataset.initialSignature, strokes: [] };
+  }
+  return { image: "", strokes: [] };
 }
 
 function renderChecklistSection(sectionStat, date) {
