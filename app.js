@@ -29,6 +29,10 @@ const staffScheduleDayLabels = {
   sat: "토",
   sun: "일",
 };
+const defaultAttendanceStaffMembers = [
+  { id: "staff_ham_minseo", name: "함민서", startTime: "12:00", endTime: "17:00" },
+  { id: "staff_lee_miso", name: "이미소", startTime: "12:00", endTime: "17:00" },
+];
 const timeSelectOptions = Array.from({ length: 49 }, (_, index) => {
   const totalMinutes = index * 30;
   const hour = Math.floor(totalMinutes / 60);
@@ -269,7 +273,8 @@ const els = {
 let db = loadDb();
 localRevisionAt = db.meta?.updatedAt || "";
 const initializedMeasuredWhippingPreset = ensureMeasuredWhippingPreset();
-if (pruneExpiredLogs() || initializedMeasuredWhippingPreset) {
+const initializedDefaultAttendanceStaff = ensureDefaultAttendanceStaff();
+if (pruneExpiredLogs() || initializedMeasuredWhippingPreset || initializedDefaultAttendanceStaff) {
   markDbChanged();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
 }
@@ -1070,7 +1075,8 @@ function applyRemoteState(row, { force = false, source = "realtime" } = {}) {
   db = normalizeDb(row.data);
   const prunedExpiredLogs = pruneExpiredLogs();
   const initializedMeasuredPreset = ensureMeasuredWhippingPreset();
-  if (prunedExpiredLogs || initializedMeasuredPreset) markDbChanged();
+  const initializedDefaultStaff = ensureDefaultAttendanceStaff();
+  if (prunedExpiredLogs || initializedMeasuredPreset || initializedDefaultStaff) markDbChanged();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
   lastRemoteUpdatedAt = nextUpdatedAt || nowIso();
   localRevisionAt = db.meta?.updatedAt || lastRemoteUpdatedAt;
@@ -1727,7 +1733,7 @@ function makeDefaultOperations(createdAt = nowIso()) {
     checklistTasks,
     checklistRecords: [],
     handoverNotes: [],
-    staffMembers: [],
+    staffMembers: makeDefaultAttendanceStaffMembers(createdAt),
     attendanceRecords: [],
     serviceManuals: makeDefaultServiceManuals(createdAt),
   };
@@ -1744,6 +1750,72 @@ function makeChecklistTask(id, section, title, sortOrder, createdAt = nowIso(), 
     createdAt,
     updatedAt: createdAt,
   };
+}
+
+function makeDefaultStaffSchedule(startTime = "12:00", endTime = "17:00") {
+  return dayKeys.reduce((schedule, dayKey) => {
+    schedule[dayKey] = { enabled: true, startTime, endTime };
+    return schedule;
+  }, {});
+}
+
+function makeAttendanceStaffMember(id, name, startTime, endTime, sortOrder, createdAt = nowIso()) {
+  return {
+    id,
+    name,
+    isActive: true,
+    schedule: makeDefaultStaffSchedule(startTime, endTime),
+    sortOrder,
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
+function makeDefaultAttendanceStaffMembers(createdAt = nowIso()) {
+  return defaultAttendanceStaffMembers.map((staff, index) =>
+    makeAttendanceStaffMember(staff.id, staff.name, staff.startTime, staff.endTime, index + 1, createdAt),
+  );
+}
+
+function staffHasEnabledSchedule(staff) {
+  return Object.values(normalizeStaffSchedule(staff?.schedule)).some((day) => day.enabled && day.startTime && day.endTime);
+}
+
+function ensureDefaultAttendanceStaff() {
+  if (!db.operations) db.operations = makeDefaultOperations();
+  if (!Array.isArray(db.operations.staffMembers)) db.operations.staffMembers = [];
+
+  const createdAt = nowIso();
+  let changed = false;
+  defaultAttendanceStaffMembers.forEach((defaultStaff) => {
+    const existing = db.operations.staffMembers.find((staff) => String(staff.name || "").trim() === defaultStaff.name);
+    if (existing) {
+      if (existing.isActive === false) {
+        existing.isActive = true;
+        existing.updatedAt = createdAt;
+        changed = true;
+      }
+      if (!staffHasEnabledSchedule(existing)) {
+        existing.schedule = makeDefaultStaffSchedule(defaultStaff.startTime, defaultStaff.endTime);
+        existing.updatedAt = createdAt;
+        changed = true;
+      }
+      return;
+    }
+
+    const id = db.operations.staffMembers.some((staff) => staff.id === defaultStaff.id) ? uid("staff") : defaultStaff.id;
+    db.operations.staffMembers.push(
+      makeAttendanceStaffMember(id, defaultStaff.name, defaultStaff.startTime, defaultStaff.endTime, db.operations.staffMembers.length + 1, createdAt),
+    );
+    changed = true;
+  });
+
+  if (changed) {
+    getStaffMembersForAdmin().forEach((staff, index) => {
+      staff.sortOrder = index + 1;
+    });
+  }
+  return changed;
 }
 
 function recipeSortValue(recipe, index = 0) {
