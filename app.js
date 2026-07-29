@@ -525,6 +525,13 @@ function formatWorkDuration(startTime, endTime, breakMinutes = 0) {
   return minutes === null ? "" : formatDurationText(Math.max(0, minutes - normalizeBreakMinutes(breakMinutes)));
 }
 
+function formatAttendanceWorkPreview(startTime, endTime, breakMinutes = 0) {
+  const rangeText = formatClockRange(startTime, endTime);
+  const workText = formatWorkDuration(startTime, endTime, breakMinutes);
+  if (rangeText && workText) return `${rangeText} · ${workText}`;
+  return workText || rangeText || "";
+}
+
 function renderTimeSelect(attributes = {}, selectedValue = "", label = "") {
   const normalizedValue = normalizeTimeValue(selectedValue);
   const attributeText = Object.entries(attributes)
@@ -2915,7 +2922,12 @@ function renderAttendanceScreen() {
           <section class="attendance-time-panel">
             <div class="attendance-time-heading">
               <strong>근무시간</strong>
-              <span>${selectedRecord ? attendanceRecordedWorkText(selectedRecord) || "시간 기록 없음" : formatTimeRange(timingValues.scheduledStart, timingValues.scheduledEnd)}</span>
+              <span id="attendanceWorkPreview">${
+                selectedRecord
+                  ? attendanceRecordedWorkText(selectedRecord) || "시간 기록 없음"
+                  : formatAttendanceWorkPreview(timingValues.actualStart, timingValues.actualEnd, timingValues.breakMinutes) ||
+                    formatTimeRange(timingValues.scheduledStart, timingValues.scheduledEnd)
+              }</span>
             </div>
             <div class="attendance-time-grid">
               <label class="field">
@@ -3039,6 +3051,9 @@ function renderAttendanceScreen() {
       help.textContent = `${attendanceAbsenceTypeLabel(state.pendingAttendanceAbsenceType)} 선택됨. 확인을 누르면 최종 확인창이 열립니다.`;
     }
   });
+  ["attendanceActualStart", "attendanceActualEnd", "attendanceBreakMinutes"].forEach((id) => {
+    els.workArea.querySelector(`#${id}`)?.addEventListener("change", () => updateAttendanceWorkPreview(els.workArea));
+  });
   els.workArea.querySelector("#confirmEmployeeAttendance")?.addEventListener("click", () => openAttendanceConfirmModal(els.workArea));
   els.workArea.querySelector("#confirmManagerAttendance")?.addEventListener("click", () => confirmManagerAttendance(els.workArea));
   els.workArea.querySelector("#deleteAttendanceRecord")?.addEventListener("click", deleteAttendanceRecord);
@@ -3092,6 +3107,17 @@ function selectPendingAttendanceStatus(status, container) {
         ? `${attendanceAbsenceTypeLabel(state.pendingAttendanceAbsenceType)} 선택됨. 확인을 누르면 최종 확인창이 열립니다.`
         : `${attendanceStatusLabel(nextStatus)} 선택됨. 확인을 누르면 최종 확인창이 열립니다.`;
   }
+}
+
+function updateAttendanceWorkPreview(container) {
+  const preview = container.querySelector("#attendanceWorkPreview");
+  if (!preview) return;
+  const actualStart = normalizeTimeValue(container.querySelector("#attendanceActualStart")?.value);
+  const actualEnd = normalizeTimeValue(container.querySelector("#attendanceActualEnd")?.value);
+  const breakMinutes = normalizeBreakMinutes(container.querySelector("#attendanceBreakMinutes")?.value);
+  const scheduledStart = normalizeTimeValue(container.querySelector("#attendanceScheduledStart")?.value);
+  const scheduledEnd = normalizeTimeValue(container.querySelector("#attendanceScheduledEnd")?.value);
+  preview.textContent = formatAttendanceWorkPreview(actualStart, actualEnd, breakMinutes) || formatTimeRange(scheduledStart, scheduledEnd);
 }
 
 function buildAttendanceDraft(status, container) {
