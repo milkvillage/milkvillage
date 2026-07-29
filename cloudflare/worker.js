@@ -43,7 +43,10 @@ export default {
 };
 
 async function handleGetState(env, stateId, { metaOnly = false } = {}) {
-  const row = await env.DB.prepare("select id, data, updated_at from milk_village_state where id = ?").bind(stateId).first();
+  const sql = metaOnly
+    ? "select id, updated_at from milk_village_state where id = ?"
+    : "select id, data, updated_at from milk_village_state where id = ?";
+  const row = await env.DB.prepare(sql).bind(stateId).first();
   if (!row) return json({ error: "state_not_found" }, { status: 404 });
   if (metaOnly) return json({ id: row.id, updated_at: row.updated_at });
   const data = await readStateData(env, row);

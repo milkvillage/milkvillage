@@ -5,6 +5,7 @@ const ENABLE_REALTIME_SYNC = false;
 const REMOTE_POLL_INTERVAL_MS = 30 * 60 * 1000;
 const REMOTE_POLL_HIDDEN_INTERVAL_MS = 60 * 60 * 1000;
 const REMOTE_SAVE_DEBOUNCE_MS = 30 * 1000;
+const REMOTE_RESUME_SYNC_COOLDOWN_MS = 5 * 60 * 1000;
 const CHECKLIST_TEMPLATE_VERSION = "20260627-open-checklist-v1";
 const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const alarmDayOrder = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
@@ -175,6 +176,7 @@ let remoteChannel = null;
 let remotePollTimer = null;
 let lastRemoteUpdatedAt = "";
 let localRevisionAt = "";
+let lastRemoteResumeSyncAt = 0;
 let remoteInitialSyncDone = !remoteClient;
 let remoteResumeSyncInFlight = false;
 let remoteResumeSyncPromise = null;
@@ -1104,7 +1106,19 @@ function syncRemoteBeforeAlarmCheck(source = "resume") {
     return Promise.resolve(false);
   }
   if (remoteResumeSyncPromise) return remoteResumeSyncPromise;
+  const nowMs = Date.now();
+  const shouldThrottleResumeSync =
+    (source === "resume" || source === "focus") &&
+    remoteInitialSyncDone &&
+    lastRemoteUpdatedAt &&
+    lastRemoteResumeSyncAt &&
+    nowMs - lastRemoteResumeSyncAt < REMOTE_RESUME_SYNC_COOLDOWN_MS;
+  if (shouldThrottleResumeSync) {
+    checkAlarms();
+    return Promise.resolve(false);
+  }
 
+  lastRemoteResumeSyncAt = nowMs;
   remoteResumeSyncInFlight = true;
   remoteResumeSyncPromise = fetchRemoteStateIfChanged({ source })
     .catch((error) => {
