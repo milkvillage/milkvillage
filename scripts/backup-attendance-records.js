@@ -8,19 +8,27 @@ const { pathToFileURL } = require("node:url");
 const repoRoot = path.resolve(__dirname, "..");
 const defaultEnvPath = path.join(repoRoot, ".env.local");
 const statePath = path.join(__dirname, ".attendance-backup-state.json");
-const DEFAULT_PUBLISHABLE_KEY = "sb_publishable_KLXkL3WkYQXTTUsdE9WZJw_Vw63SWtM";
-
 loadEnvFile(defaultEnvPath);
 loadEnvFile(path.join(process.env.APPDATA || "", "MilkVillage", "attendance-backup.env"));
 
-const config = {
-  supabaseUrl: readRequiredEnv("SUPABASE_URL"),
-  accessKey: process.env.SUPABASE_STATE_ACCESS_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || DEFAULT_PUBLISHABLE_KEY,
-  table: process.env.SUPABASE_STATE_TABLE || "milk_village_state",
-  stateId: process.env.SUPABASE_STATE_ID || "main",
-  backupFolder: process.env.ATTENDANCE_BACKUP_FOLDER || "C:\\milk village\\03_attendance_backups",
-  pdfBrowserPath: process.env.ATTENDANCE_PDF_BROWSER_PATH || "",
-};
+const cloudflareApiBaseUrl = normalizeRemoteApiBaseUrl(process.env.MILK_VILLAGE_API_BASE_URL || process.env.CLOUDFLARE_API_BASE_URL);
+const config = cloudflareApiBaseUrl
+  ? {
+      backend: "cloudflare",
+      apiBaseUrl: cloudflareApiBaseUrl,
+      stateId: process.env.REMOTE_STATE_ID || process.env.SUPABASE_STATE_ID || "main",
+      backupFolder: process.env.ATTENDANCE_BACKUP_FOLDER || "C:\\milk village\\03_attendance_backups",
+      pdfBrowserPath: process.env.ATTENDANCE_PDF_BROWSER_PATH || "",
+    }
+  : {
+      backend: "supabase",
+      supabaseUrl: readRequiredEnv("SUPABASE_URL"),
+      accessKey: process.env.SUPABASE_STATE_ACCESS_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || "",
+      table: process.env.SUPABASE_STATE_TABLE || "milk_village_state",
+      stateId: process.env.SUPABASE_STATE_ID || "main",
+      backupFolder: process.env.ATTENDANCE_BACKUP_FOLDER || "C:\\milk village\\03_attendance_backups",
+      pdfBrowserPath: process.env.ATTENDANCE_PDF_BROWSER_PATH || "",
+    };
 
 main().catch((error) => {
   console.error(`[attendance-backup] ${error.message}`);
@@ -67,6 +75,21 @@ async function main() {
 }
 
 async function fetchRemoteState() {
+  if (config.backend === "cloudflare") {
+    const response = await fetch(`${config.apiBaseUrl}/state/${encodeURIComponent(config.stateId)}`, {
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`remote state fetch failed: ${response.status} ${body}`);
+    }
+    const row = await response.json();
+    if (!row?.data) {
+      throw new Error("remote app state not found. Open the app once first, then run backup again.");
+    }
+    return row.data;
+  }
+
   const url = `${config.supabaseUrl}/rest/v1/${config.table}?id=eq.${encodeURIComponent(config.stateId)}&select=data`;
   const response = await fetch(url, {
     headers: makeApiHeaders(config.accessKey, { Accept: "application/json" }),
@@ -429,6 +452,10 @@ function makeApiHeaders(accessKey, extraHeaders = {}) {
     headers.Authorization = `Bearer ${accessKey}`;
   }
   return headers;
+}
+
+function normalizeRemoteApiBaseUrl(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
 }
 
 function readRequiredEnv(key) {

@@ -10,6 +10,7 @@
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" href="./app-icon.svg" type="image/svg+xml" />
     <title>Milk Village 관리</title>
+    <script src="./remote-config.js"></script>
     <script>
       window.__MILK_VILLAGE_VERSION__ = fetch("./version.json?ts=" + Date.now(), { cache: "no-store" })
         .then((response) => response.json())
@@ -157,7 +158,6 @@
       </section>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script>
       window.__MILK_VILLAGE_VERSION__.then((version) => {
         const script = document.createElement("script");

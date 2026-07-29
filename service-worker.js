@@ -1,5 +1,5 @@
-const CACHE_NAME = "milk-village-pwa-v2";
-const APP_SHELL = ["./", "./index.html", "./manifest.webmanifest", "./app-icon.svg"];
+const CACHE_NAME = "milk-village-pwa-v3";
+const APP_SHELL = ["./", "./index.html", "./remote-config.js", "./manifest.webmanifest", "./app-icon.svg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

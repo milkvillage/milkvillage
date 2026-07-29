@@ -1,7 +1,5 @@
 const STORAGE_KEY = "milk-village-mvp-v1";
-const SUPABASE_URL = "https://irfalbrkahcouaugbqwj.supabase.co";
-const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_KLXkL3WkYQXTTUsdE9WZJw_Vw63SWtM";
-const REMOTE_TABLE = "milk_village_state";
+const REMOTE_API_BASE_URL = window.MILK_VILLAGE_API_BASE_URL || "";
 const REMOTE_STATE_ID = "main";
 const ENABLE_REALTIME_SYNC = false;
 const REMOTE_POLL_INTERVAL_MS = 5 * 60 * 1000;
@@ -70,8 +68,7 @@ const LOG_RETENTION_DAYS = {
 const ADMIN_UNLOCK_DURATION_MS = 10 * 60 * 1000;
 const VERSION_CHECK_INTERVAL_MS = 2 * 60 * 1000;
 const ALARM_HISTORY_LIMIT = 8;
-const ALARM_SOUND_BUCKET = "alarm-sounds";
-const ALARM_SOUND_PUBLIC_BASE_URL = `${SUPABASE_URL}/storage/v1/object/public/${ALARM_SOUND_BUCKET}`;
+const ALARM_SOUND_PUBLIC_BASE_URL = makeRemoteApiUrl("/sounds");
 const DEFAULT_ALARM_SOUND_ID = "sound_supplies_check";
 const INTERNAL_ALARM_SOUNDS = [
   {
@@ -79,21 +76,21 @@ const INTERNAL_ALARM_SOUNDS = [
     name: "위생 관리 점검",
     description: "매장 청결과 위생 상태를 확인하라는 알림음입니다.",
     fileName: "store-cleanliness-check.mp3",
-    url: `${ALARM_SOUND_PUBLIC_BASE_URL}/store-cleanliness-check.mp3`,
+    url: makeAlarmSoundUrl("store-cleanliness-check.mp3"),
   },
   {
     id: "sound_pre_peak_supplies",
     name: "피크 전 소모품 준비",
     description: "바쁜 시간 전에 필요한 재료와 소모품을 준비하라는 알림음입니다.",
     fileName: "pre-peak-supplies.mp3",
-    url: `${ALARM_SOUND_PUBLIC_BASE_URL}/pre-peak-supplies.mp3`,
+    url: makeAlarmSoundUrl("pre-peak-supplies.mp3"),
   },
   {
     id: DEFAULT_ALARM_SOUND_ID,
     name: "소모품 확인",
     description: "부족한 소모품을 확인하고 채우라는 알림음입니다.",
     fileName: "supplies-check.mp3",
-    url: `${ALARM_SOUND_PUBLIC_BASE_URL}/supplies-check.mp3`,
+    url: makeAlarmSoundUrl("supplies-check.mp3"),
   },
 ];
 const ALARM_SOUND_KOREAN_PRESETS = {
@@ -169,10 +166,8 @@ const ALARM_SOUND_WORDS_KO = {
   receive: "입고",
   received: "입고",
 };
-const supabaseClient =
-  window.supabase && SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY
-    ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
-    : null;
+const remoteApiBaseUrl = normalizeRemoteApiBaseUrl(REMOTE_API_BASE_URL);
+const remoteClient = remoteApiBaseUrl ? { baseUrl: remoteApiBaseUrl } : null;
 
 let remoteSaveTimer = null;
 let applyingRemoteState = false;
@@ -180,7 +175,7 @@ let remoteChannel = null;
 let remotePollTimer = null;
 let lastRemoteUpdatedAt = "";
 let localRevisionAt = "";
-let remoteInitialSyncDone = !supabaseClient;
+let remoteInitialSyncDone = !remoteClient;
 let remoteResumeSyncInFlight = false;
 let remoteResumeSyncPromise = null;
 let pendingSpeech = null;
@@ -285,6 +280,40 @@ state.selectedAnalysisSupplyId = getSuppliesForAdmin()[0]?.id || null;
 function uid(prefix) {
   const value = crypto?.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   return `${prefix}_${value}`;
+}
+
+function normalizeRemoteApiBaseUrl(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+function makeRemoteApiUrl(path) {
+  const baseUrl = normalizeRemoteApiBaseUrl(REMOTE_API_BASE_URL);
+  if (!baseUrl) return "";
+  return `${baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+function makeAlarmSoundUrl(fileName) {
+  return ALARM_SOUND_PUBLIC_BASE_URL ? `${ALARM_SOUND_PUBLIC_BASE_URL}/${encodeURIComponent(fileName)}` : "";
+}
+
+async function fetchRemoteJson(path, options = {}) {
+  if (!remoteClient) return null;
+  const response = await fetch(`${remoteClient.baseUrl}${path}`, {
+    ...options,
+    headers: {
+      Accept: "application/json",
+      ...(options.headers || {}),
+    },
+  });
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!response.ok) {
+    const error = new Error(data?.message || data?.error || `remote request failed: ${response.status}`);
+    error.status = response.status;
+    error.data = data;
+    throw error;
+  }
+  return data;
 }
 
 function nowIso() {
@@ -992,7 +1021,7 @@ function setRemoteStatus(text, status = "") {
 }
 
 async function initRemoteSync() {
-  if (!supabaseClient) {
+  if (!remoteClient) {
     remoteInitialSyncDone = true;
     setRemoteStatus("로컬 저장", "");
     checkAlarms();
@@ -1018,23 +1047,31 @@ async function initRemoteSync() {
 }
 
 async function fetchRemoteState({ force = false, source = "poll" } = {}) {
-  if (!supabaseClient) return false;
-  const { data, error } = await supabaseClient.from(REMOTE_TABLE).select("data, updated_at").eq("id", REMOTE_STATE_ID).maybeSingle();
-  if (error) throw error;
-  if (!data?.data) return false;
-  applyRemoteState(data, { force, source });
+  if (!remoteClient) return false;
+  let row = null;
+  try {
+    row = await fetchRemoteJson(`/state/${encodeURIComponent(REMOTE_STATE_ID)}`);
+  } catch (error) {
+    if (error.status === 404) return false;
+    throw error;
+  }
+  if (!row?.data) return false;
+  applyRemoteState(row, { force, source });
   return true;
 }
 
 async function fetchRemoteMeta() {
-  if (!supabaseClient) return null;
-  const { data, error } = await supabaseClient.from(REMOTE_TABLE).select("updated_at").eq("id", REMOTE_STATE_ID).maybeSingle();
-  if (error) throw error;
-  return data || null;
+  if (!remoteClient) return null;
+  try {
+    return await fetchRemoteJson(`/state/${encodeURIComponent(REMOTE_STATE_ID)}/meta`);
+  } catch (error) {
+    if (error.status === 404) return null;
+    throw error;
+  }
 }
 
 async function fetchRemoteStateIfChanged({ force = false, source = "poll" } = {}) {
-  if (!supabaseClient) return false;
+  if (!remoteClient) return false;
   if (force || !lastRemoteUpdatedAt) return fetchRemoteState({ force, source });
 
   const meta = await fetchRemoteMeta();
@@ -1045,7 +1082,7 @@ async function fetchRemoteStateIfChanged({ force = false, source = "poll" } = {}
 }
 
 function syncRemoteBeforeAlarmCheck(source = "resume") {
-  if (!supabaseClient) {
+  if (!remoteClient) {
     checkAlarms();
     return Promise.resolve(false);
   }
@@ -1085,7 +1122,7 @@ function applyRemoteState(row, { force = false, source = "realtime" } = {}) {
   setRemoteStatus(source === "realtime" ? "실시간 동기화됨" : "DB 동기화됨", "online");
   render();
   syncAlarmModalFromRemote(source);
-  if (prunedExpiredLogs || initializedMeasuredPreset) queueRemoteSave();
+  if (prunedExpiredLogs || initializedMeasuredPreset || initializedDefaultStaff) queueRemoteSave();
 }
 
 function syncSelectedIds() {
@@ -1109,29 +1146,11 @@ function syncSelectedIds() {
 }
 
 function subscribeRemoteChanges() {
-  if (!ENABLE_REALTIME_SYNC || !supabaseClient || remoteChannel) return;
-  remoteChannel = supabaseClient
-    .channel("milk-village-state-sync")
-    .on(
-      "postgres_changes",
-      {
-        event: "*",
-        schema: "public",
-        table: REMOTE_TABLE,
-        filter: `id=eq.${REMOTE_STATE_ID}`,
-      },
-      (payload) => {
-        if (payload.new?.data) applyRemoteState(payload.new, { source: "realtime" });
-      },
-    )
-    .subscribe((status) => {
-      if (status === "SUBSCRIBED") setRemoteStatus("실시간 연결됨", "online");
-      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") setRemoteStatus("실시간 재연결 중", "saving");
-    });
+  if (!ENABLE_REALTIME_SYNC || !remoteClient || remoteChannel) return;
 }
 
 function startRemotePolling() {
-  if (!supabaseClient || remotePollTimer) return;
+  if (!remoteClient || remotePollTimer) return;
   const poll = () => {
     fetchRemoteStateIfChanged({ source: "poll" }).catch((error) => {
       console.error(error);
@@ -1144,25 +1163,23 @@ function startRemotePolling() {
 }
 
 function queueRemoteSave() {
-  if (!supabaseClient || applyingRemoteState) return;
+  if (!remoteClient || applyingRemoteState) return;
   window.clearTimeout(remoteSaveTimer);
   remoteSaveTimer = window.setTimeout(saveRemoteNow, REMOTE_SAVE_DEBOUNCE_MS);
 }
 
 async function saveRemoteNow() {
-  if (!supabaseClient) return;
+  if (!remoteClient) return;
   remoteSaveTimer = null;
   setRemoteStatus("DB 저장 중", "saving");
   const dataToSave = normalizeDb(db);
   const localUpdatedAt = dataToSave.meta?.updatedAt || localRevisionAt || nowIso();
 
-  const { data: remoteMeta, error: fetchError } = await supabaseClient
-    .from(REMOTE_TABLE)
-    .select("updated_at")
-    .eq("id", REMOTE_STATE_ID)
-    .maybeSingle();
-  if (fetchError) {
-    console.error(fetchError);
+  let remoteMeta = null;
+  try {
+    remoteMeta = await fetchRemoteMeta();
+  } catch (error) {
+    console.error(error);
     setRemoteStatus("DB 저장 실패", "error");
     return;
   }
@@ -1175,13 +1192,11 @@ async function saveRemoteNow() {
     const remoteIsNewerThanLastSync = !lastRemoteUpdatedAt || isIsoAfter(remoteMeta.updated_at, lastRemoteUpdatedAt);
     const remoteIsNewerThanLocal = isIsoAfter(remoteMeta.updated_at, localUpdatedAt);
     if (remoteIsNewerThanLastSync || remoteIsNewerThanLocal) {
-      const { data: remoteRow, error: remoteDataError } = await supabaseClient
-        .from(REMOTE_TABLE)
-        .select("data, updated_at")
-        .eq("id", REMOTE_STATE_ID)
-        .maybeSingle();
-      if (remoteDataError) {
-        console.error(remoteDataError);
+      let remoteRow = null;
+      try {
+        remoteRow = await fetchRemoteJson(`/state/${encodeURIComponent(REMOTE_STATE_ID)}`);
+      } catch (error) {
+        console.error(error);
         setRemoteStatus("DB 저장 실패", "error");
         return;
       }
@@ -1195,12 +1210,16 @@ async function saveRemoteNow() {
     }
   }
 
-  const { error } = await supabaseClient.from(REMOTE_TABLE).upsert({
-    id: REMOTE_STATE_ID,
-    data: dataToSave,
-    updated_at: localUpdatedAt,
-  });
-  if (error) {
+  try {
+    await fetchRemoteJson(`/state/${encodeURIComponent(REMOTE_STATE_ID)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        data: dataToSave,
+        updated_at: localUpdatedAt,
+      }),
+    });
+  } catch (error) {
     console.error(error);
     setRemoteStatus("DB 저장 실패", "error");
     return;
@@ -6520,7 +6539,7 @@ function snoozeAlarm() {
 
 function checkAlarms() {
   if (document.visibilityState && document.visibilityState !== "visible") return;
-  if (supabaseClient && (!remoteInitialSyncDone || remoteResumeSyncInFlight)) return;
+  if (remoteClient && (!remoteInitialSyncDone || remoteResumeSyncInFlight)) return;
   const now = new Date();
   const day = dayKeys[now.getDay()];
   let changed = false;

@@ -5,22 +5,31 @@ const path = require("node:path");
 const repoRoot = path.resolve(__dirname, "..");
 const defaultEnvPath = path.join(repoRoot, ".env.local");
 const statePath = path.join(__dirname, ".alarm-sound-sync-state.json");
-const DEFAULT_PUBLISHABLE_KEY = "sb_publishable_KLXkL3WkYQXTTUsdE9WZJw_Vw63SWtM";
-
 loadEnvFile(defaultEnvPath);
 loadEnvFile(path.join(process.env.APPDATA || "", "MilkVillage", "alarm-sound-sync.env"));
 
-const config = {
-  supabaseUrl: readRequiredEnv("SUPABASE_URL"),
-  serviceRoleKey: readRequiredEnv("SUPABASE_SERVICE_ROLE_KEY"),
-  stateAccessKey: process.env.SUPABASE_STATE_ACCESS_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || DEFAULT_PUBLISHABLE_KEY,
-  bucket: process.env.SUPABASE_STORAGE_BUCKET || "alarm-sounds",
-  table: process.env.SUPABASE_STATE_TABLE || "milk_village_state",
-  stateId: process.env.SUPABASE_STATE_ID || "main",
-  soundFolder: process.env.SOUND_FOLDER || "C:\\milk village\\02_sound",
-};
+const cloudflareApiBaseUrl = normalizeRemoteApiBaseUrl(process.env.MILK_VILLAGE_API_BASE_URL || process.env.CLOUDFLARE_API_BASE_URL);
+const config = cloudflareApiBaseUrl
+  ? {
+      backend: "cloudflare",
+      apiBaseUrl: cloudflareApiBaseUrl,
+      adminSyncKey: process.env.CLOUDFLARE_ADMIN_SYNC_KEY || process.env.ADMIN_SYNC_KEY || "",
+      stateId: process.env.REMOTE_STATE_ID || process.env.SUPABASE_STATE_ID || "main",
+      soundFolder: process.env.SOUND_FOLDER || "C:\\milk village\\02_sound",
+    }
+  : {
+      backend: "supabase",
+      supabaseUrl: readRequiredEnv("SUPABASE_URL"),
+      serviceRoleKey: readRequiredEnv("SUPABASE_SERVICE_ROLE_KEY"),
+      stateAccessKey: process.env.SUPABASE_STATE_ACCESS_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || "",
+      bucket: process.env.SUPABASE_STORAGE_BUCKET || "alarm-sounds",
+      table: process.env.SUPABASE_STATE_TABLE || "milk_village_state",
+      stateId: process.env.SUPABASE_STATE_ID || "main",
+      soundFolder: process.env.SOUND_FOLDER || "C:\\milk village\\02_sound",
+    };
 
-const publicBaseUrl = `${config.supabaseUrl}/storage/v1/object/public/${config.bucket}`;
+const publicBaseUrl =
+  config.backend === "cloudflare" ? `${config.apiBaseUrl}/sounds` : `${config.supabaseUrl}/storage/v1/object/public/${config.bucket}`;
 const ALARM_SOUND_KOREAN_PRESETS = {
   "store-cleanliness-check": {
     name: "위생 관리 점검",
@@ -250,6 +259,19 @@ async function main() {
 
 async function uploadMp3(fullPath, objectName) {
   const bytes = await fsp.readFile(fullPath);
+  if (config.backend === "cloudflare") {
+    const response = await fetch(`${config.apiBaseUrl}/sounds/${encodePathSegment(objectName)}`, {
+      method: "PUT",
+      headers: makeCloudflareHeaders({ "Content-Type": "audio/mpeg" }),
+      body: bytes,
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`upload failed for ${objectName}: ${response.status} ${body}`);
+    }
+    return;
+  }
+
   const response = await fetch(`${config.supabaseUrl}/storage/v1/object/${config.bucket}/${encodePathSegment(objectName)}`, {
     method: "POST",
     headers: {
@@ -267,6 +289,18 @@ async function uploadMp3(fullPath, objectName) {
 }
 
 async function deleteMp3(objectName) {
+  if (config.backend === "cloudflare") {
+    const response = await fetch(`${config.apiBaseUrl}/sounds/${encodePathSegment(objectName)}`, {
+      method: "DELETE",
+      headers: makeCloudflareHeaders(),
+    });
+    if (!response.ok && response.status !== 404) {
+      const body = await response.text();
+      throw new Error(`delete failed for ${objectName}: ${response.status} ${body}`);
+    }
+    return;
+  }
+
   const response = await fetch(`${config.supabaseUrl}/storage/v1/object/${config.bucket}/${encodePathSegment(objectName)}`, {
     method: "DELETE",
     headers: {
@@ -281,6 +315,21 @@ async function deleteMp3(objectName) {
 }
 
 async function fetchRemoteState() {
+  if (config.backend === "cloudflare") {
+    const response = await fetch(`${config.apiBaseUrl}/state/${encodeURIComponent(config.stateId)}`, {
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`remote state fetch failed: ${response.status} ${body}`);
+    }
+    const row = await response.json();
+    if (!row?.data) {
+      throw new Error("remote app state not found. Open the app once first, then run sync again.");
+    }
+    return row;
+  }
+
   const url = `${config.supabaseUrl}/rest/v1/${config.table}?id=eq.${encodeURIComponent(config.stateId)}&select=data,updated_at`;
   const response = await fetch(url, {
     headers: makeApiHeaders(config.stateAccessKey, { Accept: "application/json" }),
@@ -298,6 +347,22 @@ async function fetchRemoteState() {
 }
 
 async function updateRemoteState(data, updatedAt) {
+  if (config.backend === "cloudflare") {
+    const response = await fetch(`${config.apiBaseUrl}/state/${encodeURIComponent(config.stateId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        data,
+        updated_at: updatedAt,
+      }),
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`remote state update failed: ${response.status} ${body}`);
+    }
+    return;
+  }
+
   const response = await fetch(`${config.supabaseUrl}/rest/v1/${config.table}?id=eq.${encodeURIComponent(config.stateId)}`, {
     method: "PATCH",
     headers: makeApiHeaders(config.stateAccessKey, { "Content-Type": "application/json" }),
@@ -335,6 +400,16 @@ function makeApiHeaders(accessKey, extraHeaders = {}) {
     headers.Authorization = `Bearer ${accessKey}`;
   }
   return headers;
+}
+
+function makeCloudflareHeaders(extraHeaders = {}) {
+  const headers = { ...extraHeaders };
+  if (config.adminSyncKey) headers["X-Milk-Village-Admin-Key"] = config.adminSyncKey;
+  return headers;
+}
+
+function normalizeRemoteApiBaseUrl(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
 }
 
 function readRequiredEnv(key) {

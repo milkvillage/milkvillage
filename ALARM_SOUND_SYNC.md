@@ -1,14 +1,16 @@
 # Alarm Sound Manual Sync
 
-`C:\milk village\02_sound` 폴더에 mp3 파일을 넣은 뒤, 직접 버튼을 눌렀을 때만 Supabase Storage의 `alarm-sounds` 버킷과 앱의 알림음 목록을 동기화합니다.
+`C:\milk village\02_sound` 폴더에 mp3 파일을 넣은 뒤, 직접 버튼을 눌렀을 때만 Cloudflare R2와 앱의 알림음 목록을 동기화합니다.
 
 ## 최초 1회 설정
 
-1. Supabase service role key를 로컬에 저장합니다.
+1. Cloudflare Worker API 주소를 로컬에 저장합니다.
 
 ```powershell
-.\scripts\set-alarm-sync-key.ps1
+.\scripts\set-cloudflare-api-url.ps1 -ApiBaseUrl "https://milk-village-api.your-subdomain.workers.dev"
 ```
+
+Cloudflare Worker의 `ADMIN_SYNC_KEY`를 설정했다면 `-AdminSyncKey "내가정한키"`를 함께 넣습니다.
 
 2. 바탕화면에 수동 동기화 버튼을 만듭니다.
 
@@ -36,4 +38,4 @@
 
 ## 보안
 
-`.env.local`과 `%APPDATA%\MilkVillage\alarm-sound-sync.env`는 GitHub에 올라가지 않습니다. Supabase service role key는 로컬 컴퓨터에만 보관하세요.
+`.env.local`과 `%APPDATA%\MilkVillage\alarm-sound-sync.env`는 GitHub에 올라가지 않습니다. `ADMIN_SYNC_KEY`를 설정했다면 로컬 컴퓨터에만 보관하세요.

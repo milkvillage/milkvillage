@@ -1,6 +1,4 @@
-const SUPABASE_URL = "https://irfalbrkahcouaugbqwj.supabase.co";
-const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_KLXkL3WkYQXTTUsdE9WZJw_Vw63SWtM";
-const REMOTE_TABLE = "milk_village_state";
+const REMOTE_API_BASE_URL = window.MILK_VILLAGE_API_BASE_URL || "";
 const REMOTE_STATE_ID = "main";
 const SETTINGS_KEY = "milk-village-owner-payroll-settings-v1";
 const UNLOCK_DURATION_MS = 10 * 60 * 1000;
@@ -40,10 +38,7 @@ const state = {
   selectedMonth: currentMonthKey(),
 };
 
-const supabaseClient =
-  window.supabase && SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY
-    ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
-    : null;
+const remoteApiBaseUrl = normalizeRemoteApiBaseUrl(REMOTE_API_BASE_URL);
 
 function loadSettings() {
   try {
@@ -84,6 +79,27 @@ function fallbackHashValue(value) {
 function setStatus(text, status = "") {
   els.connectionStatus.textContent = text;
   els.connectionStatus.className = `status-pill${status ? ` is-${status}` : ""}`;
+}
+
+function normalizeRemoteApiBaseUrl(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+async function fetchRemoteJson(path, options = {}) {
+  if (!remoteApiBaseUrl) return null;
+  const response = await fetch(`${remoteApiBaseUrl}${path}`, {
+    ...options,
+    headers: {
+      Accept: "application/json",
+      ...(options.headers || {}),
+    },
+  });
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!response.ok) {
+    throw new Error(data?.message || data?.error || `remote request failed: ${response.status}`);
+  }
+  return data;
 }
 
 function showMode(mode) {
@@ -161,19 +177,18 @@ function expireIfNeeded() {
 }
 
 async function fetchRemoteState() {
-  if (!supabaseClient) {
+  if (!remoteApiBaseUrl) {
     setStatus("DB 설정 없음", "error");
     return;
   }
   setStatus("불러오는 중", "");
   try {
-    const { data, error } = await supabaseClient.from(REMOTE_TABLE).select("data, updated_at").eq("id", REMOTE_STATE_ID).maybeSingle();
-    if (error) throw error;
-    const remoteData = data?.data || {};
+    const row = await fetchRemoteJson(`/state/${encodeURIComponent(REMOTE_STATE_ID)}`);
+    const remoteData = row?.data || {};
     const operations = remoteData.operations || {};
     state.staffMembers = normalizeStaffMembers(operations.staffMembers);
     state.attendanceRecords = normalizeAttendanceRecords(operations.attendanceRecords);
-    state.remoteUpdatedAt = data?.updated_at || "";
+    state.remoteUpdatedAt = row?.updated_at || "";
     ensureStaffSettings();
     saveSettings();
     setStatus("연결됨", "online");
@@ -181,7 +196,7 @@ async function fetchRemoteState() {
   } catch (error) {
     console.error(error);
     setStatus("DB 실패", "error");
-    els.remoteUpdatedText.textContent = "Supabase 사용량 제한 또는 네트워크 문제로 근퇴기록을 불러오지 못했습니다.";
+    els.remoteUpdatedText.textContent = "Cloudflare DB 설정 또는 네트워크 문제로 근퇴기록을 불러오지 못했습니다.";
   }
 }
 

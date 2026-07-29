@@ -20,7 +20,7 @@ $Shortcut.TargetPath = $PowerShellPath
 $Shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
 $Shortcut.WorkingDirectory = $RepoRoot
 $Shortcut.IconLocation = "$env:SystemRoot\System32\SHELL32.dll,167"
-$Shortcut.Description = "Sync Milk Village mp3 alarm sounds to Supabase."
+$Shortcut.Description = "Sync Milk Village mp3 alarm sounds to Cloudflare R2."
 $Shortcut.Save()
 
 Write-Host "Created shortcut: $ShortcutPath"

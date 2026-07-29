@@ -11,7 +11,7 @@ $ExamplePath = Join-Path $RepoRoot ".env.local.example"
 
 if (-not (Test-Path $EnvPath)) {
   Copy-Item $ExamplePath $EnvPath
-  Write-Host "Created .env.local. Open it and paste SUPABASE_SERVICE_ROLE_KEY before relying on the task."
+  Write-Host "Created .env.local. Open it and paste MILK_VILLAGE_API_BASE_URL before relying on the task."
 }
 
 $Action = New-ScheduledTaskAction `
@@ -28,7 +28,7 @@ Register-ScheduledTask `
   -Action $Action `
   -Trigger $Trigger `
   -Principal $Principal `
-  -Description "Upload Milk Village alarm mp3 files from C:\milk village\02_sound to Supabase Storage." `
+  -Description "Upload Milk Village alarm mp3 files from C:\milk village\02_sound to Cloudflare R2." `
   -Force | Out-Null
 
 Write-Host "Installed scheduled task '$TaskName' to run every $Minutes minutes."

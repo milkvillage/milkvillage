@@ -11,7 +11,7 @@ $ExamplePath = Join-Path $RepoRoot ".env.local.example"
 
 if (-not (Test-Path $EnvPath)) {
   Copy-Item $ExamplePath $EnvPath
-  Write-Host "Created .env.local. Paste your Supabase key before relying on the backup task."
+  Write-Host "Created .env.local. Paste MILK_VILLAGE_API_BASE_URL before relying on the backup task."
 }
 
 $Action = New-ScheduledTaskAction `

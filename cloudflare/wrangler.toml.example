@@ -1,0 +1,17 @@
+name = "milk-village-api"
+main = "worker.js"
+compatibility_date = "2026-07-29"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "milk-village-db"
+database_id = "paste-your-d1-database-id"
+
+[[r2_buckets]]
+binding = "ALARM_SOUNDS"
+bucket_name = "milk-village-alarm-sounds"
+
+[vars]
+# Optional. If set, scripts must send this value in X-Milk-Village-Admin-Key.
+ADMIN_SYNC_KEY = ""
+

@@ -1,0 +1,2 @@
+window.MILK_VILLAGE_API_BASE_URL = "";
+

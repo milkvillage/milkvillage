@@ -1,4 +1,5 @@
 .env.local
+cloudflare/wrangler.toml
 *.log
 scripts/.alarm-sound-sync-state.json
 scripts/.attendance-backup-state.json
