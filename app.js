@@ -186,6 +186,10 @@ let speechKeepAliveTimer = null;
 let activeAlarmSoundEventId = "";
 let activeAlarmSoundVolume = null;
 let alarmAudio = null;
+let alarmBufferSource = null;
+let alarmGainNode = null;
+const alarmAudioPool = new Map();
+const alarmSoundBufferCache = new Map();
 let previewAudio = null;
 let lastSpeechUnlockAttemptAt = 0;
 let wakeLock = null;
@@ -6746,6 +6750,93 @@ function getAudioContext() {
   return audioContext;
 }
 
+function getAlarmSoundUrl(sound) {
+  return String(sound?.url || "").trim();
+}
+
+function getReusableAlarmAudio(sound) {
+  const url = getAlarmSoundUrl(sound);
+  if (!url) return null;
+  const existingAudio = alarmAudioPool.get(url);
+  if (existingAudio) return existingAudio;
+  const audio = new Audio(url);
+  audio.preload = "auto";
+  audio.crossOrigin = "anonymous";
+  audio.setAttribute("playsinline", "true");
+  alarmAudioPool.set(url, audio);
+  return audio;
+}
+
+function getAlarmUnlockSounds(activeAlarm = null) {
+  const byUrl = new Map();
+  const addSound = (sound) => {
+    const url = getAlarmSoundUrl(sound);
+    if (url && !byUrl.has(url)) byUrl.set(url, sound);
+  };
+  if (activeAlarm?.soundId) addSound(getVoicePreset(activeAlarm.soundId));
+  addSound(getVoicePreset(db.settings.defaultSoundId));
+  db.alarmSounds.forEach(addSound);
+  return [...byUrl.values()];
+}
+
+function primeAlarmBufferOutput(activeAlarm = null) {
+  const context = getAudioContext();
+  if (!context || context.state !== "running") return;
+  getAlarmUnlockSounds(activeAlarm).forEach((sound) => {
+    getAlarmSoundBuffer(sound).catch(() => {
+      // The alarm playback path will show a visible error if this exact sound is needed later.
+    });
+  });
+}
+
+function primeAlarmFileOutput({ immediate = false } = {}) {
+  const activeEvent = db.alarmEventLogs.find((log) => log.id === state.activeAlarmEventId);
+  const activeAlarm = activeEvent ? getAlarmDisplayFromEvent(activeEvent) : null;
+  const sounds = getAlarmUnlockSounds(activeAlarm);
+  sounds.forEach((sound, index) => {
+    const audio = getReusableAlarmAudio(sound);
+    if (!audio) return;
+    try {
+      audio.loop = false;
+      audio.preload = "auto";
+      audio.load?.();
+      if (!immediate || index > 0) return;
+      audio.pause();
+      audio.currentTime = 0;
+      audio.muted = false;
+      audio.volume = 0.01;
+      const played = audio.play();
+      if (!played?.then) return;
+      played
+        .then(() => {
+          markSpeechReady();
+          window.setTimeout(() => {
+            try {
+              if (audio === alarmAudio) return;
+              audio.pause();
+              audio.currentTime = 0;
+              audio.volume = 1;
+            } catch {
+              // A pre-warmed audio element may already be released by the browser.
+            }
+          }, 90);
+        })
+        .catch(() => {
+          if (activeEvent?.status === "triggered") showSoundPlaybackHelp("알림음 재생이 브라우저에 막혔습니다. 화면 아무 곳이나 한 번 터치하면 자동으로 다시 시도합니다.");
+        });
+    } catch {
+      // Preloading is best-effort; the real alarm playback has a retry path.
+    }
+  });
+}
+
+function showSoundPlaybackHelp(message) {
+  if (!els.soundHelp || els.alarmModal.hidden) return;
+  els.soundHelp.textContent = message;
+  els.soundHelp.hidden = false;
+  renderSoundStatus();
+}
+
 function primeAudioOutput() {
   const context = getAudioContext();
   if (!context) return false;
@@ -6761,6 +6852,7 @@ function primeAudioOutput() {
       oscillator.start();
       oscillator.stop(context.currentTime + 0.04);
       markSpeechReady();
+      primeAlarmBufferOutput();
     } catch {
       markSpeechOff();
     }
@@ -6784,8 +6876,11 @@ function primeAudioOutput() {
 function unlockAudio({ announce = true, immediate = false } = {}) {
   prepareSpeechVoices();
   primeAudioOutput();
-  requestWakeLock();
   const activeEvent = db.alarmEventLogs.find((log) => log.id === state.activeAlarmEventId);
+  const activeAlarm = activeEvent ? getAlarmDisplayFromEvent(activeEvent) : null;
+  primeAlarmFileOutput({ immediate });
+  primeAlarmBufferOutput(activeAlarm);
+  requestWakeLock();
   const now = Date.now();
   if (!announce && !activeEvent && now - lastSpeechUnlockAttemptAt < 1200) return;
   lastSpeechUnlockAttemptAt = now;
@@ -6823,7 +6918,8 @@ function startAlarmSound(alarm, { forceRestart = false, immediate = false } = {}
   activeAlarmSoundVolume = playbackVolume;
   requestWakeLock();
   primeAudioOutput();
-  playAlarmFileSound(alarm, { eventId: soundEventId, volume: playbackVolume });
+  primeAlarmFileOutput({ immediate });
+  attemptAlarmPlayback(alarm, { eventId: soundEventId, volume: playbackVolume });
 }
 
 function stopAlarmSound() {
@@ -6836,6 +6932,7 @@ function stopAlarmSound() {
   activeAlarmSoundEventId = "";
   activeAlarmSoundVolume = null;
   pendingSpeech = null;
+  stopAlarmBufferSound();
   stopAlarmFileSound();
   try {
     window.speechSynthesis?.cancel();
@@ -6859,14 +6956,118 @@ function getAlarmPlaybackVolume(alarm, sound = null) {
   return normalizeAlarmVolume(alarm?.volume ?? sound?.volume);
 }
 
+function stopAlarmBufferSound() {
+  if (alarmBufferSource) {
+    try {
+      alarmBufferSource.stop();
+    } catch {
+      // Buffer source may have already stopped.
+    }
+    try {
+      alarmBufferSource.disconnect();
+    } catch {
+      // Disconnect can fail when the node was already released.
+    }
+  }
+  if (alarmGainNode) {
+    try {
+      alarmGainNode.disconnect();
+    } catch {
+      // Disconnect can fail when the node was already released.
+    }
+  }
+  alarmBufferSource = null;
+  alarmGainNode = null;
+}
+
+async function getAlarmSoundBuffer(sound) {
+  const url = getAlarmSoundUrl(sound);
+  if (!url) return null;
+  if (alarmSoundBufferCache.has(url)) return alarmSoundBufferCache.get(url);
+  const context = getAudioContext();
+  if (!context) return null;
+  const bufferPromise = fetch(url, { cache: "force-cache" })
+    .then((response) => {
+      if (!response.ok) throw new Error(`alarm sound fetch failed: ${response.status}`);
+      return response.arrayBuffer();
+    })
+    .then((arrayBuffer) => context.decodeAudioData(arrayBuffer));
+  alarmSoundBufferCache.set(url, bufferPromise);
+  return bufferPromise.catch((error) => {
+    alarmSoundBufferCache.delete(url);
+    throw error;
+  });
+}
+
+async function playAlarmBufferSound(alarm, { eventId = "", volume = null } = {}) {
+  const sound = getVoicePreset(alarm.soundId || db.settings.defaultSoundId);
+  const context = getAudioContext();
+  if (!sound?.url || !context) return false;
+  if (context.state !== "running") {
+    try {
+      await context.resume();
+    } catch {
+      return false;
+    }
+  }
+  if (context.state !== "running") return false;
+
+  const soundEventId = eventId || activeAlarmSoundEventId;
+  try {
+    const buffer = await getAlarmSoundBuffer(sound);
+    if (soundEventId && soundEventId !== activeAlarmSoundEventId) return true;
+    if (!buffer) return false;
+    stopAlarmBufferSound();
+    stopAlarmFileSound();
+    const source = context.createBufferSource();
+    const gain = context.createGain();
+    source.buffer = buffer;
+    source.loop = true;
+    gain.gain.value = volume === null ? getAlarmPlaybackVolume(alarm, sound) : normalizeAlarmVolume(volume);
+    source.connect(gain);
+    gain.connect(context.destination);
+    source.start();
+    alarmBufferSource = source;
+    alarmGainNode = gain;
+    markSpeechReady();
+    if (els.soundHelp) els.soundHelp.hidden = true;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function retryAlarmPlayback(alarm, { eventId = "", volume = null, delay = 1200 } = {}) {
+  window.clearTimeout(alarmSoundRetryTimer);
+  alarmSoundRetryTimer = window.setTimeout(() => {
+    if (!eventId || eventId === activeAlarmSoundEventId) attemptAlarmPlayback(alarm, { eventId, volume });
+  }, delay);
+}
+
+async function attemptAlarmPlayback(alarm, { eventId = "", volume = null } = {}) {
+  const soundEventId = eventId || activeAlarmSoundEventId;
+  const startedWithBuffer = await playAlarmBufferSound(alarm, { eventId: soundEventId, volume });
+  if (soundEventId && soundEventId !== activeAlarmSoundEventId) return false;
+  if (startedWithBuffer) return true;
+  const startedWithFile = playAlarmFileSound(alarm, { eventId: soundEventId, volume });
+  if (!startedWithFile) {
+    markSpeechOff();
+    showSoundPlaybackHelp("알림음 파일을 찾을 수 없습니다. 관리자 알림음 설정을 확인해주세요.");
+    retryAlarmPlayback(alarm, { eventId: soundEventId, volume, delay: 2500 });
+  }
+  return startedWithFile;
+}
+
 function playAlarmFileSound(alarm, { eventId = "", volume = null } = {}) {
   const sound = getVoicePreset(alarm.soundId || db.settings.defaultSoundId);
   if (!sound?.url) return false;
   const soundEventId = eventId || activeAlarmSoundEventId;
   stopAlarmFileSound();
-  alarmAudio = new Audio(sound.url);
+  stopAlarmBufferSound();
+  alarmAudio = getReusableAlarmAudio(sound) || new Audio(sound.url);
   alarmAudio.loop = true;
   alarmAudio.preload = "auto";
+  alarmAudio.muted = false;
   alarmAudio.volume = volume === null ? getAlarmPlaybackVolume(alarm, sound) : normalizeAlarmVolume(volume);
   alarmAudio.addEventListener("playing", markSpeechReady, { once: true });
   alarmAudio.addEventListener(
@@ -6874,10 +7075,8 @@ function playAlarmFileSound(alarm, { eventId = "", volume = null } = {}) {
     () => {
       if (soundEventId && soundEventId !== activeAlarmSoundEventId) return;
       markSpeechOff();
-      window.clearTimeout(alarmSoundRetryTimer);
-      alarmSoundRetryTimer = window.setTimeout(() => {
-        if (!soundEventId || soundEventId === activeAlarmSoundEventId) playAlarmFileSound(alarm, { eventId: soundEventId });
-      }, 1200);
+      showSoundPlaybackHelp("알림음 파일을 불러오지 못했습니다. 네트워크와 알림음 파일을 확인해주세요.");
+      retryAlarmPlayback(alarm, { eventId: soundEventId, volume, delay: 1500 });
     },
     { once: true },
   );
@@ -6887,10 +7086,8 @@ function playAlarmFileSound(alarm, { eventId = "", volume = null } = {}) {
     .catch(() => {
       if (soundEventId && soundEventId !== activeAlarmSoundEventId) return;
       markSpeechOff();
-      window.clearTimeout(alarmSoundRetryTimer);
-      alarmSoundRetryTimer = window.setTimeout(() => {
-        if (!soundEventId || soundEventId === activeAlarmSoundEventId) playAlarmFileSound(alarm, { eventId: soundEventId });
-      }, 1200);
+      showSoundPlaybackHelp("태블릿 브라우저가 알림음 자동재생을 막았습니다. 화면 아무 곳이나 한 번 터치하면 자동으로 다시 시도합니다.");
+      retryAlarmPlayback(alarm, { eventId: soundEventId, volume, delay: 1200 });
     });
   return true;
 }
