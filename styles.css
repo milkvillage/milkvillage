@@ -1314,15 +1314,15 @@ th {
 .manual-simple-box p {
   margin: 0;
   color: var(--text);
-  font-size: 20px;
-  font-weight: 850;
+  font-size: 80%;
+  font-weight: 400;
   line-height: 1.45;
 }
 
 .manual-simple-box--script p {
   color: var(--teal-dark);
-  font-size: 22px;
-  font-weight: 950;
+  font-size: 80%;
+  font-weight: 400;
 }
 
 .manual-pinned {
