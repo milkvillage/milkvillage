@@ -1044,7 +1044,8 @@ async function initRemoteSync() {
     applyingRemoteState = false;
     remoteInitialSyncDone = true;
     console.error(error);
-    setRemoteStatus("Cloudflare 저장 확인 필요", "error");
+    const currentStatus = els.remoteStatus?.textContent || "";
+    setRemoteStatus(currentStatus.includes("실패") ? currentStatus : "Cloudflare 저장 확인 필요", "error");
     checkAlarms();
   }
 }
@@ -1183,7 +1184,7 @@ async function saveRemoteNow() {
     remoteMeta = await fetchRemoteMeta();
   } catch (error) {
     console.error(error);
-    setRemoteStatus("Cloudflare 저장 실패", "error");
+    setRemoteStatus(formatRemoteSaveError(error), "error");
     return false;
   }
   if (isIsoAfter(localRevisionAt, localUpdatedAt)) {
@@ -1200,7 +1201,7 @@ async function saveRemoteNow() {
         remoteRow = await fetchRemoteJson(`/state/${encodeURIComponent(REMOTE_STATE_ID)}`);
       } catch (error) {
         console.error(error);
-        setRemoteStatus("Cloudflare 저장 실패", "error");
+        setRemoteStatus(formatRemoteSaveError(error), "error");
         return false;
       }
       if (remoteRow?.data && remoteRow.updated_at) {
@@ -1224,7 +1225,7 @@ async function saveRemoteNow() {
     });
   } catch (error) {
     console.error(error);
-    setRemoteStatus("Cloudflare 저장 실패", "error");
+    setRemoteStatus(formatRemoteSaveError(error), "error");
     return false;
   }
   if (isIsoAfter(localRevisionAt, localUpdatedAt)) {
@@ -1239,6 +1240,11 @@ async function saveRemoteNow() {
   setRemoteStatus("Cloudflare 연결됨", "online");
   syncAlarmModalFromRemote("local");
   return true;
+}
+
+function formatRemoteSaveError(error) {
+  const status = error?.status ? ` ${error.status}` : "";
+  return `Cloudflare 저장 실패${status}`;
 }
 
 function seedDb() {

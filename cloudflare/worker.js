@@ -4,6 +4,8 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type, X-Milk-Village-Admin-Key",
   "Access-Control-Max-Age": "86400",
 };
+const CHUNKED_STATE_MARKER = "milk_village_chunked_state_v1";
+const STATE_CHUNK_SIZE = 128 * 1024;
 
 export default {
   async fetch(request, env) {
@@ -44,9 +46,10 @@ async function handleGetState(env, stateId, { metaOnly = false } = {}) {
   const row = await env.DB.prepare("select id, data, updated_at from milk_village_state where id = ?").bind(stateId).first();
   if (!row) return json({ error: "state_not_found" }, { status: 404 });
   if (metaOnly) return json({ id: row.id, updated_at: row.updated_at });
+  const data = await readStateData(env, row);
   return json({
     id: row.id,
-    data: parseStateData(row.data),
+    data,
     updated_at: row.updated_at,
   });
 }
@@ -58,15 +61,70 @@ async function handlePutState(request, env, stateId) {
   }
 
   const updatedAt = normalizeIso(body.updated_at) || new Date().toISOString();
+  const serialized = JSON.stringify(body.data);
+  const chunks = splitStateData(serialized);
+  const stateData =
+    chunks.length > 1
+      ? JSON.stringify({
+          __type: CHUNKED_STATE_MARKER,
+          chunks: chunks.length,
+          bytes: serialized.length,
+        })
+      : serialized;
+
   await env.DB.prepare(
     `insert into milk_village_state (id, data, updated_at)
      values (?, ?, ?)
      on conflict(id) do update set data = excluded.data, updated_at = excluded.updated_at`,
   )
-    .bind(stateId, JSON.stringify(body.data), updatedAt)
+    .bind(stateId, stateData, updatedAt)
     .run();
 
+  await env.DB.prepare("delete from milk_village_state_chunks where state_id = ?").bind(stateId).run();
+  if (chunks.length > 1) {
+    for (const [index, chunk] of chunks.entries()) {
+      await env.DB.prepare(
+        `insert into milk_village_state_chunks (state_id, chunk_index, data_chunk)
+         values (?, ?, ?)`,
+      )
+        .bind(stateId, index, chunk)
+        .run();
+    }
+  }
+
   return json({ id: stateId, updated_at: updatedAt });
+}
+
+async function readStateData(env, row) {
+  const parsed = parseStateData(row.data);
+  if (!isChunkedStateReference(parsed)) return parsed;
+
+  const result = await env.DB.prepare(
+    `select chunk_index, data_chunk
+     from milk_village_state_chunks
+     where state_id = ?
+     order by chunk_index asc`,
+  )
+    .bind(row.id)
+    .all();
+  const rows = Array.isArray(result?.results) ? result.results : [];
+  if (rows.length !== parsed.chunks) {
+    throw new Error(`chunked state is incomplete: expected ${parsed.chunks}, got ${rows.length}`);
+  }
+  return parseStateData(rows.map((chunk) => chunk.data_chunk || "").join(""));
+}
+
+function isChunkedStateReference(value) {
+  return value?.__type === CHUNKED_STATE_MARKER && Number.isInteger(value.chunks) && value.chunks > 0;
+}
+
+function splitStateData(serialized) {
+  if (serialized.length <= STATE_CHUNK_SIZE) return [serialized];
+  const chunks = [];
+  for (let index = 0; index < serialized.length; index += STATE_CHUNK_SIZE) {
+    chunks.push(serialized.slice(index, index + STATE_CHUNK_SIZE));
+  }
+  return chunks;
 }
 
 async function handleGetSound(env, objectName) {
@@ -133,4 +191,3 @@ function withCors(response) {
   Object.entries(CORS_HEADERS).forEach(([key, value]) => headers.set(key, value));
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
-
