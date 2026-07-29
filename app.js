@@ -176,6 +176,7 @@ let remoteChannel = null;
 let remotePollTimer = null;
 let lastRemoteUpdatedAt = "";
 let localRevisionAt = "";
+let hasPendingRemoteSave = false;
 let lastRemoteResumeSyncAt = 0;
 let remoteInitialSyncDone = !remoteClient;
 let remoteResumeSyncInFlight = false;
@@ -549,10 +550,17 @@ function renderTimeSelect(attributes = {}, selectedValue = "", label = "") {
   `;
 }
 
-function saveDb() {
+function saveDb({ immediateRemote = false } = {}) {
   pruneExpiredLogs();
-  if (!applyingRemoteState) markDbChanged();
+  if (!applyingRemoteState) {
+    markDbChanged();
+    hasPendingRemoteSave = true;
+  }
   localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+  if (immediateRemote) {
+    void flushRemoteSaveNow();
+    return;
+  }
   queueRemoteSave();
 }
 
@@ -1138,6 +1146,16 @@ function syncRemoteBeforeAlarmCheck(source = "resume") {
 function applyRemoteState(row, { force = false, source = "realtime" } = {}) {
   const nextUpdatedAt = row.updated_at || "";
   if (!force && nextUpdatedAt && lastRemoteUpdatedAt && new Date(nextUpdatedAt) <= new Date(lastRemoteUpdatedAt)) return;
+  if (!force && hasPendingRemoteSave) {
+    setRemoteStatus("로컬 변경 저장 대기", "saving");
+    queueRemoteSave();
+    return;
+  }
+  if (!force && nextUpdatedAt && localRevisionAt && isIsoAfter(localRevisionAt, nextUpdatedAt)) {
+    setRemoteStatus("로컬 변경 저장 대기", "saving");
+    queueRemoteSave();
+    return;
+  }
 
   applyingRemoteState = true;
   db = normalizeDb(row.data);
@@ -1199,6 +1217,13 @@ function queueRemoteSave() {
   remoteSaveTimer = window.setTimeout(saveRemoteNow, REMOTE_SAVE_DEBOUNCE_MS);
 }
 
+function flushRemoteSaveNow() {
+  if (!remoteClient || applyingRemoteState) return Promise.resolve(false);
+  window.clearTimeout(remoteSaveTimer);
+  remoteSaveTimer = null;
+  return saveRemoteNow();
+}
+
 async function saveRemoteNow() {
   if (!remoteClient) return false;
   remoteSaveTimer = null;
@@ -1233,7 +1258,7 @@ async function saveRemoteNow() {
       }
       if (remoteRow?.data && remoteRow.updated_at) {
         if (remoteIsNewerThanLastSync) mergeRemoteAlarmEvents(dataToSave, normalizeDb(remoteRow.data));
-        if (remoteIsNewerThanLastSync && remoteIsNewerThanLocal) {
+        if (!hasPendingRemoteSave && remoteIsNewerThanLastSync && remoteIsNewerThanLocal) {
           applyRemoteState(remoteRow, { force: true, source: "save" });
           return true;
         }
@@ -1264,6 +1289,7 @@ async function saveRemoteNow() {
   db = dataToSave;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
   lastRemoteUpdatedAt = localUpdatedAt;
+  hasPendingRemoteSave = false;
   setRemoteStatus("Cloudflare 연결됨", "online");
   syncAlarmModalFromRemote("local");
   return true;
@@ -6013,7 +6039,7 @@ function renderAlarmsAdmin(container) {
     db.alarms.push(alarm);
     state.selectedAlarmId = alarm.id;
     state.savedMessage = "알림 이름, 시간, 요일, 오픈/마감 시간, 반복 간격, 볼륨, 알림음을 선택한 뒤 저장하면 작동합니다.";
-    saveDb();
+    saveDb({ immediateRemote: true });
     renderAdminScreen();
   });
   container.querySelectorAll("[data-fill-alarm-title]").forEach((button) => {
@@ -6046,7 +6072,7 @@ function renderAlarmsAdmin(container) {
     if (!alarm) return;
     db.alarms = db.alarms.filter((item) => item.id !== alarm.id);
     state.selectedAlarmId = db.alarms[0]?.id || null;
-    saveDb();
+    saveDb({ immediateRemote: true });
     renderAdminScreen();
   });
   container.querySelector("#testAlarm")?.addEventListener("click", () => {
@@ -6067,7 +6093,7 @@ function renderAlarmsAdmin(container) {
     }
     Object.assign(alarm, nextAlarm);
     state.savedMessage = "저장 완료";
-    saveDb();
+    saveDb({ immediateRemote: true });
     restartActiveAlarmIfMatching(alarm);
     state.selectedAlarmId = alarm.id;
     renderAdminScreen();
