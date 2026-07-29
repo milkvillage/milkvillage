@@ -414,6 +414,7 @@ function renderPayrollList(payrolls) {
           ${payroll.hourlyRate && payroll.hourlyRate < MINIMUM_HOURLY_WAGE_2026 ? `<p class="notice">시급이 2026년 최저임금 ${formatWon(MINIMUM_HOURLY_WAGE_2026)}보다 낮습니다.</p>` : ""}
           ${payroll.unconfirmedCount ? `<p class="notice">매니저 서명이 없는 근퇴기록이 포함되어 있습니다.</p>` : ""}
           ${payroll.weeklyAllowanceReviewFlags.length ? `<p class="notice">주휴수당 제외 검토: ${payroll.weeklyAllowanceReviewFlags.map(escapeHtml).join(" / ")}</p>` : ""}
+          ${renderWeeklyPayrollTable(payroll, { compact: true })}
           <div class="button-row">
             <button class="button button--primary button--small" type="button" data-print-staff="${escapeAttr(payroll.staff.id)}">급여 PDF</button>
             <button class="button button--ghost button--small" type="button" data-print-attendance="${escapeAttr(payroll.staff.id)}">근퇴 PDF</button>
@@ -448,9 +449,10 @@ function calculatePayroll(staff) {
   const weeklyAllowanceReviewFlags = getWeeklyAllowanceReviewFlags(records);
   const workMinutes = presentRecords.reduce((sum, record) => sum + getRecordWorkMinutes(record), 0);
   const breakMinutes = presentRecords.reduce((sum, record) => sum + normalizeBreakMinutes(record.breakMinutes), 0);
-  const weeklyAllowanceMinutes = setting.weeklyAllowance ? calculateWeeklyAllowanceMinutes(presentRecords) : 0;
+  const weeklyPayrollSections = buildWeeklyPayrollSections(records, setting, hourlyRate);
+  const weeklyAllowanceMinutes = weeklyPayrollSections.reduce((sum, section) => sum + section.weeklyAllowanceMinutes, 0);
   const basePay = Math.round((workMinutes / 60) * hourlyRate);
-  const weeklyAllowancePay = Math.round((weeklyAllowanceMinutes / 60) * hourlyRate);
+  const weeklyAllowancePay = weeklyPayrollSections.reduce((sum, section) => sum + section.weeklyAllowancePay, 0);
   const grossPay = basePay + weeklyAllowancePay;
   const withholdingAmount = setting.withholding ? Math.floor(grossPay * WITHHOLDING_RATE) : 0;
   const netPay = grossPay - withholdingAmount;
@@ -465,6 +467,7 @@ function calculatePayroll(staff) {
     absentRecords,
     unexcusedAbsenceRecords,
     weeklyAllowanceReviewFlags,
+    weeklyPayrollSections,
     workMinutes,
     breakMinutes,
     weeklyAllowanceMinutes,
@@ -475,6 +478,222 @@ function calculatePayroll(staff) {
     netPay,
     unconfirmedCount,
   };
+}
+
+function buildWeeklyPayrollSections(records, setting, hourlyRate) {
+  const weekly = new Map();
+  records.forEach((record) => {
+    const key = getWeekKey(record.date);
+    if (!weekly.has(key)) weekly.set(key, []);
+    weekly.get(key).push(record);
+  });
+
+  return Array.from(weekly.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([weekKey, weekRecords], index) => {
+      const recordsByDate = new Map(weekRecords.map((record) => [record.date, record]));
+      const dayItems = getWeekDateKeys(weekKey).map((dateKey) => {
+        const record = recordsByDate.get(dateKey) || null;
+        const isWorkRecord = isAttendanceWorkStatus(record?.status) && record?.actualStart && record?.actualEnd;
+        const workMinutes = isWorkRecord ? getRecordWorkMinutes(record) : 0;
+        const basePay = Math.round((workMinutes / 60) * hourlyRate);
+        return {
+          dateKey,
+          record,
+          statusText: record ? formatPayrollAttendanceStatus(record) : "",
+          statusClass: record ? getPayrollStatusClass(record) : "",
+          workMinutes,
+          hourlyRate: record ? hourlyRate : 0,
+          basePay,
+          netBasePay: getNetAmount(basePay, setting),
+        };
+      });
+      const weeklyWorkMinutes = dayItems.reduce((sum, item) => sum + item.workMinutes, 0);
+      const weeklyBasePay = dayItems.reduce((sum, item) => sum + item.basePay, 0);
+      const weeklyBaseNetPay = dayItems.reduce((sum, item) => sum + item.netBasePay, 0);
+      const weeklyAllowanceMinutes =
+        setting.weeklyAllowance && weeklyWorkMinutes >= 15 * 60 ? Math.min(8 * 60, Math.round(weeklyWorkMinutes / 5)) : 0;
+      const weeklyAllowancePay = Math.round((weeklyAllowanceMinutes / 60) * hourlyRate);
+      const weeklyGrossPay = weeklyBasePay + weeklyAllowancePay;
+      const weeklyWithholdingAmount = setting.withholding ? Math.floor(weeklyGrossPay * WITHHOLDING_RATE) : 0;
+      const weeklyNetPay = weeklyGrossPay - weeklyWithholdingAmount;
+
+      return {
+        weekKey,
+        label: formatPayrollWeekTitle(index),
+        dateRange: formatWeekLabel(weekKey),
+        dayItems,
+        statusSummary: summarizeWeekStatuses(weekRecords),
+        weeklyWorkMinutes,
+        weeklyBasePay,
+        weeklyBaseNetPay,
+        weeklyAllowanceMinutes,
+        weeklyAllowancePay,
+        weeklyGrossPay,
+        weeklyWithholdingAmount,
+        weeklyNetPay,
+      };
+    });
+}
+
+function renderWeeklyPayrollTable(payroll, options = {}) {
+  const sections = payroll.weeklyPayrollSections || [];
+  if (!sections.length) {
+    return `<section class="weekly-payroll${options.compact ? " is-compact" : ""}"><div class="weekly-payroll-empty">해당 월 근퇴기록이 없습니다.</div></section>`;
+  }
+
+  return `
+    <section class="weekly-payroll${options.compact ? " is-compact" : ""}">
+      <div class="weekly-payroll-title">주차별 급여 계산</div>
+      ${sections.map((section) => renderWeeklyPayrollSection(section, payroll.setting)).join("")}
+    </section>
+  `;
+}
+
+function renderWeeklyPayrollSection(section, setting) {
+  return `
+    <article class="weekly-payroll-section">
+      <div class="weekly-payroll-heading">
+        <strong>${escapeHtml(section.label)}</strong>
+        <span>${escapeHtml(section.dateRange)}</span>
+      </div>
+      <div class="weekly-payroll-table-wrap">
+        <table class="weekly-payroll-table">
+          <thead>
+            <tr>
+              <th>구분</th>
+              ${section.dayItems.map((item) => `<th>${escapeHtml(formatPayrollDateHeader(item.dateKey))}</th>`).join("")}
+              <th>합산</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${renderWeeklyPayrollRow(
+              "출근",
+              section.dayItems.map((item) =>
+                item.statusText ? `<span class="payroll-status ${escapeAttr(item.statusClass)}">${escapeHtml(item.statusText)}</span>` : "",
+              ),
+              escapeHtml(section.statusSummary),
+            )}
+            ${renderWeeklyPayrollRow(
+              "근무시간",
+              section.dayItems.map((item) => formatPayrollDurationCell(item.workMinutes)),
+              formatDurationText(section.weeklyWorkMinutes),
+            )}
+            ${renderWeeklyPayrollRow(
+              "시급",
+              section.dayItems.map((item) => (item.record ? formatPayrollRateCell(item.hourlyRate) : "")),
+              formatPayrollRateCell(section.dayItems.find((item) => item.hourlyRate)?.hourlyRate || 0),
+            )}
+            ${renderWeeklyPayrollRow(
+              "합산급",
+              section.dayItems.map((item) => formatPayrollWonCell(item.basePay)),
+              formatPayrollWonCell(section.weeklyBasePay, true),
+            )}
+            ${renderWeeklyPayrollRow(
+              "3.3% 반영",
+              section.dayItems.map((item) => formatPayrollWonCell(item.netBasePay)),
+              setting.withholding ? formatPayrollWonCell(section.weeklyBaseNetPay, true) : "미적용",
+            )}
+            ${renderWeeklyPayrollRow(
+              "주휴수당",
+              section.dayItems.map(() => ""),
+              section.weeklyAllowancePay ? `${formatPayrollWonCell(section.weeklyAllowancePay, true)}<small>${formatDurationText(section.weeklyAllowanceMinutes)} 기준</small>` : "0원",
+            )}
+            ${renderWeeklyPayrollRow(
+              "주 합계",
+              section.dayItems.map(() => ""),
+              formatPayrollGrossNetCell(section.weeklyGrossPay, section.weeklyNetPay, setting),
+              "is-week-total",
+            )}
+          </tbody>
+        </table>
+      </div>
+    </article>
+  `;
+}
+
+function renderWeeklyPayrollRow(label, dayCells, totalCell, className = "") {
+  return `
+    <tr class="${className}">
+      <th>${escapeHtml(label)}</th>
+      ${dayCells.map((cell) => `<td>${cell || ""}</td>`).join("")}
+      <td class="weekly-total-cell">${totalCell || ""}</td>
+    </tr>
+  `;
+}
+
+function getNetAmount(amount, setting) {
+  const safeAmount = Math.round(Number(amount) || 0);
+  if (!setting?.withholding) return safeAmount;
+  return safeAmount - Math.floor(safeAmount * WITHHOLDING_RATE);
+}
+
+function formatPayrollAttendanceStatus(record) {
+  if (!record) return "";
+  if (record.status === "absent") return normalizeAbsenceType(record.absenceType) === "unexcused" ? "결근(무단)" : "결근(협의)";
+  if (record.status === "late") return "지각";
+  return "출근";
+}
+
+function getPayrollStatusClass(record) {
+  if (!record) return "";
+  if (record.status === "late") return "payroll-status--late";
+  if (record.status === "absent") {
+    return normalizeAbsenceType(record.absenceType) === "unexcused" ? "payroll-status--absent-unexcused" : "payroll-status--absent-approved";
+  }
+  return "payroll-status--present";
+}
+
+function summarizeWeekStatuses(records) {
+  const counts = records.reduce(
+    (result, record) => {
+      if (record.status === "late") result.late += 1;
+      else if (record.status === "absent" && normalizeAbsenceType(record.absenceType) === "unexcused") result.absentUnexcused += 1;
+      else if (record.status === "absent") result.absentApproved += 1;
+      else result.present += 1;
+      return result;
+    },
+    { present: 0, late: 0, absentUnexcused: 0, absentApproved: 0 },
+  );
+  return [
+    counts.present ? `출근 ${counts.present}` : "",
+    counts.late ? `지각 ${counts.late}` : "",
+    counts.absentUnexcused ? `결근(무단) ${counts.absentUnexcused}` : "",
+    counts.absentApproved ? `결근(협의) ${counts.absentApproved}` : "",
+  ]
+    .filter(Boolean)
+    .join(" / ") || "-";
+}
+
+function formatPayrollDateHeader(dateKey) {
+  const date = parseDateKey(dateKey);
+  if (!date) return dateKey || "";
+  const weekdays = ["일", "월", "화", "수", "목", "금", "토"];
+  return `${String(date.getMonth() + 1).padStart(2, "0")}.${String(date.getDate()).padStart(2, "0")} (${weekdays[date.getDay()]})`;
+}
+
+function formatPayrollWeekTitle(index) {
+  const [, month] = String(state.selectedMonth || "").split("-").map(Number);
+  return month ? `${month}월 ${index + 1}주차` : `${index + 1}주차`;
+}
+
+function formatPayrollDurationCell(minutes) {
+  return minutes ? formatDurationText(minutes) : "";
+}
+
+function formatPayrollRateCell(rate) {
+  return Number(rate) > 0 ? formatWon(rate) : "-";
+}
+
+function formatPayrollWonCell(value, showZero = false) {
+  const amount = Math.round(Number(value) || 0);
+  if (!showZero && amount === 0) return "";
+  return formatWon(amount);
+}
+
+function formatPayrollGrossNetCell(grossPay, netPay, setting) {
+  if (!setting?.withholding) return `<strong>${formatWon(grossPay)}</strong>`;
+  return `<span class="payroll-money-stack"><strong>세전 ${formatWon(grossPay)}</strong><small>3.3% 후 ${formatWon(netPay)}</small></span>`;
 }
 
 function calculateWeeklyAllowanceMinutes(records) {
@@ -519,7 +738,7 @@ function getRecordWorkMinutes(record) {
 }
 
 function formatAttendanceRecordStatus(record) {
-  return record?.status === "absent" ? attendanceAbsenceTypeLabel(record.absenceType) : attendanceStatusLabel(record?.status);
+  return formatPayrollAttendanceStatus(record);
 }
 
 function isAttendanceRecordConfirmed(record) {
@@ -570,7 +789,7 @@ function printSampleAttendanceSheet() {
 function makeSamplePayroll() {
   const samplePayroll = {
     staff: { id: "sample-staff", name: "김대완" },
-    setting: { withholding: true },
+    setting: { withholding: true, weeklyAllowance: true },
     hourlyRate: 12000,
     records: [
       {
@@ -629,11 +848,12 @@ function makeSamplePayroll() {
     absentRecords: [],
     unexcusedAbsenceRecords: [],
     weeklyAllowanceReviewFlags: [],
+    weeklyPayrollSections: [],
     workMinutes: 0,
     breakMinutes: 0,
-    weeklyAllowanceMinutes: 8 * 60,
+    weeklyAllowanceMinutes: 0,
     basePay: 0,
-    weeklyAllowancePay: 96000,
+    weeklyAllowancePay: 0,
     grossPay: 0,
     withholdingAmount: 0,
     netPay: 0,
@@ -646,7 +866,10 @@ function makeSamplePayroll() {
   samplePayroll.weeklyAllowanceReviewFlags = getWeeklyAllowanceReviewFlags(samplePayroll.records);
   samplePayroll.workMinutes = samplePayroll.presentRecords.reduce((sum, record) => sum + getRecordWorkMinutes(record), 0);
   samplePayroll.breakMinutes = samplePayroll.presentRecords.reduce((sum, record) => sum + normalizeBreakMinutes(record.breakMinutes), 0);
+  samplePayroll.weeklyPayrollSections = buildWeeklyPayrollSections(samplePayroll.records, samplePayroll.setting, samplePayroll.hourlyRate);
+  samplePayroll.weeklyAllowanceMinutes = samplePayroll.weeklyPayrollSections.reduce((sum, section) => sum + section.weeklyAllowanceMinutes, 0);
   samplePayroll.basePay = Math.round((samplePayroll.workMinutes / 60) * samplePayroll.hourlyRate);
+  samplePayroll.weeklyAllowancePay = samplePayroll.weeklyPayrollSections.reduce((sum, section) => sum + section.weeklyAllowancePay, 0);
   samplePayroll.grossPay = samplePayroll.basePay + samplePayroll.weeklyAllowancePay;
   samplePayroll.withholdingAmount = Math.floor(samplePayroll.grossPay * WITHHOLDING_RATE);
   samplePayroll.netPay = samplePayroll.grossPay - samplePayroll.withholdingAmount;
@@ -686,6 +909,7 @@ function renderPayslip(payroll) {
       </table>
       <div class="payslip-total">실지급액 ${formatWon(payroll.netPay)}</div>
       ${payroll.weeklyAllowanceReviewFlags.length ? `<p class="notice">주휴수당 제외 검토: ${payroll.weeklyAllowanceReviewFlags.map(escapeHtml).join(" / ")}</p>` : ""}
+      ${renderWeeklyPayrollTable(payroll)}
       <h3>근퇴기록 상세</h3>
       <table class="payslip-table">
         <thead>
@@ -840,6 +1064,16 @@ function getWeekKey(dateKey) {
   const dayOffset = (date.getDay() + 6) % 7;
   date.setDate(date.getDate() - dayOffset);
   return formatDateKey(date);
+}
+
+function getWeekDateKeys(weekKey) {
+  const startDate = parseDateKey(weekKey);
+  if (!startDate) return [];
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(startDate);
+    date.setDate(startDate.getDate() + index);
+    return formatDateKey(date);
+  });
 }
 
 function formatWeekLabel(weekKey) {

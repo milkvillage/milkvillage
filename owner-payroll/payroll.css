@@ -327,6 +327,164 @@ h3 {
   font-weight: 900;
 }
 
+.weekly-payroll {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.weekly-payroll-title {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 1000;
+}
+
+.weekly-payroll.is-compact {
+  margin-top: 10px;
+}
+
+.weekly-payroll-section {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.weekly-payroll-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  background: #f3f7f7;
+}
+
+.weekly-payroll-heading strong {
+  font-size: 16px;
+}
+
+.weekly-payroll-heading span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.weekly-payroll-table-wrap {
+  overflow-x: auto;
+}
+
+.weekly-payroll-table {
+  width: 100%;
+  min-width: 920px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 12px;
+}
+
+.weekly-payroll-table th,
+.weekly-payroll-table td {
+  padding: 7px 6px;
+  border-bottom: 1px solid #e2e9e7;
+  border-right: 1px solid #edf1f0;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.weekly-payroll-table th:first-child,
+.weekly-payroll-table td:first-child {
+  width: 82px;
+}
+
+.weekly-payroll-table th:last-child,
+.weekly-payroll-table td:last-child {
+  width: 146px;
+  border-right: 0;
+}
+
+.weekly-payroll-table thead th {
+  background: #edf3f2;
+  color: #4f626a;
+  font-weight: 1000;
+}
+
+.weekly-payroll-table tbody th {
+  background: #fbfcfc;
+  color: #4f626a;
+  font-weight: 1000;
+}
+
+.weekly-payroll-table tbody tr:last-child th,
+.weekly-payroll-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.weekly-total-cell {
+  background: #fbf8ee;
+  font-weight: 900;
+}
+
+.is-week-total .weekly-total-cell {
+  background: #eef8f6;
+}
+
+.payroll-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #e8eef0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 1000;
+  white-space: nowrap;
+}
+
+.payroll-status--present {
+  background: #dcf7e2;
+  color: #147a37;
+}
+
+.payroll-status--late {
+  background: #fff3d8;
+  color: #936000;
+}
+
+.payroll-status--absent-unexcused {
+  background: #ffe1df;
+  color: var(--danger);
+}
+
+.payroll-status--absent-approved {
+  background: #e8eef0;
+  color: #51636b;
+}
+
+.payroll-money-stack {
+  display: grid;
+  gap: 2px;
+}
+
+.weekly-payroll-table small,
+.payroll-money-stack small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.weekly-payroll-empty {
+  padding: 14px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--muted);
+  text-align: center;
+  font-weight: 900;
+}
+
 .empty-state {
   padding: 34px;
   border: 1px dashed var(--line);
@@ -491,5 +649,58 @@ h3 {
     width: auto;
     min-height: auto;
     padding: 0;
+  }
+
+  .weekly-payroll {
+    gap: 8px;
+    margin: 10px 0 14px;
+  }
+
+  .weekly-payroll-title {
+    font-size: 15px;
+  }
+
+  .weekly-payroll-section {
+    break-inside: avoid;
+    box-shadow: none;
+  }
+
+  .weekly-payroll-heading {
+    padding: 7px 8px;
+  }
+
+  .weekly-payroll-table-wrap {
+    overflow: visible;
+  }
+
+  .weekly-payroll-table {
+    min-width: 0;
+    font-size: 9px;
+  }
+
+  .weekly-payroll-table th,
+  .weekly-payroll-table td {
+    padding: 4px 3px;
+  }
+
+  .weekly-payroll-table th:first-child,
+  .weekly-payroll-table td:first-child {
+    width: 50px;
+  }
+
+  .weekly-payroll-table th:last-child,
+  .weekly-payroll-table td:last-child {
+    width: 84px;
+  }
+
+  .payroll-status {
+    min-height: 18px;
+    padding: 2px 4px;
+    font-size: 8px;
+  }
+
+  .weekly-payroll-table small,
+  .payroll-money-stack small {
+    font-size: 8px;
   }
 }
