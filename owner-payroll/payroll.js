@@ -484,7 +484,8 @@ function calculatePayroll(staff) {
   const setting = getStaffSetting(staff.id);
   const hourlyRate = Number(setting.hourlyRate || 0);
   const staffRecords = state.attendanceRecords.filter((record) => record.staffId === staff.id).sort((a, b) => a.date.localeCompare(b.date));
-  const records = staffRecords.filter((record) => isDateInMonth(record.date, state.selectedMonth));
+  const weeklyPayrollSections = buildWeeklyPayrollSections(staffRecords, setting, hourlyRate, staff);
+  const records = getPayrollRecordsFromSections(weeklyPayrollSections);
   const workRecords = records.filter((record) => isAttendanceWorkStatus(record.status) && record.actualStart && record.actualEnd);
   const presentRecords = workRecords.filter(isPayrollPayableRecord);
   const lateRecords = records.filter((record) => record.status === "late");
@@ -492,10 +493,9 @@ function calculatePayroll(staff) {
   const unexcusedAbsenceRecords = absentRecords.filter((record) => normalizeAbsenceType(record.absenceType) === "unexcused");
   const workMinutes = presentRecords.reduce((sum, record) => sum + getRecordWorkMinutes(record), 0);
   const breakMinutes = presentRecords.reduce((sum, record) => sum + normalizeBreakMinutes(record.breakMinutes), 0);
-  const weeklyPayrollSections = buildWeeklyPayrollSections(staffRecords, setting, hourlyRate, staff);
   const weeklyAllowanceReviewFlags = getWeeklyAllowanceReviewFlagsFromSections(weeklyPayrollSections);
   const weeklyAllowanceMinutes = weeklyPayrollSections.reduce((sum, section) => sum + section.weeklyAllowanceMinutes, 0);
-  const basePay = Math.round((workMinutes / 60) * hourlyRate);
+  const basePay = weeklyPayrollSections.reduce((sum, section) => sum + section.weeklyBasePay, 0);
   const weeklyAllowancePay = weeklyPayrollSections.reduce((sum, section) => sum + section.weeklyAllowancePay, 0);
   const grossPay = basePay + weeklyAllowancePay;
   const withholdingAmount = setting.withholding ? Math.floor(grossPay * WITHHOLDING_RATE) : 0;
@@ -525,6 +525,20 @@ function calculatePayroll(staff) {
   };
 }
 
+function getPayrollRecordsFromSections(sections) {
+  const seen = new Set();
+  return sections
+    .filter((section) => section.weeklyAllowanceSettlementMonth === state.selectedMonth)
+    .flatMap((section) => section.dayItems.map((item) => item.record).filter(Boolean))
+    .filter((record) => {
+      const key = record.id || `${record.staffId || ""}:${record.date || ""}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
 function buildWeeklyPayrollSections(records, setting, hourlyRate, staff = null) {
   const recordsByDate = new Map(records.map((record) => [record.date, record]));
   const weekKeys = getPayrollWeekKeysForMonth(state.selectedMonth);
@@ -532,34 +546,40 @@ function buildWeeklyPayrollSections(records, setting, hourlyRate, staff = null) 
   return weekKeys
     .map((weekKey, index) => {
       const dateKeys = getWeekDateKeys(weekKey);
-      const dayItems = dateKeys.map((dateKey) => {
+      const rawDayItems = dateKeys.map((dateKey) => {
         const record = recordsByDate.get(dateKey) || null;
         const inSelectedMonth = isDateInMonth(dateKey, state.selectedMonth);
         const isWorkRecord = isAttendanceWorkStatus(record?.status) && record?.actualStart && record?.actualEnd;
         const isPayable = isPayrollPayableRecord(record);
         const workMinutes = isWorkRecord ? getRecordWorkMinutes(record) : 0;
-        const payableMinutes = inSelectedMonth && isPayable ? workMinutes : 0;
-        const basePay = Math.round((payableMinutes / 60) * hourlyRate);
         return {
           dateKey,
           record,
           inSelectedMonth,
           statusText: record ? formatPayrollAttendanceStatus(record) : "",
           statusClass: record ? getPayrollStatusClass(record) : "",
-          workMinutes: payableMinutes,
           rawWorkMinutes: workMinutes,
           weeklyAllowanceWorkMinutes: isPayable ? workMinutes : 0,
           employeeSigned: Boolean(record && hasEmployeeSignature(record)),
           managerConfirmed: Boolean(record && hasManagerSignature(record)),
           isPayable,
-          isMonthlyPayable: inSelectedMonth && isPayable,
           hourlyRate: record ? hourlyRate : 0,
+        };
+      });
+      const weeklyAllowanceSettlementMonth = getWeeklyAllowanceSettlementMonth(dateKeys, rawDayItems, staff);
+      const settlesThisMonth = weeklyAllowanceSettlementMonth === state.selectedMonth;
+      const dayItems = rawDayItems.map((item) => {
+        const isMonthlyPayable = settlesThisMonth && item.isPayable;
+        const workMinutes = isMonthlyPayable ? item.rawWorkMinutes : 0;
+        const basePay = Math.round((workMinutes / 60) * hourlyRate);
+        return {
+          ...item,
+          workMinutes,
+          isMonthlyPayable,
           basePay,
           netBasePay: getNetAmount(basePay, setting),
         };
       });
-      const weeklyAllowanceSettlementMonth = getWeeklyAllowanceSettlementMonth(dateKeys, dayItems, staff);
-      const settlesThisMonth = weeklyAllowanceSettlementMonth === state.selectedMonth;
       const weeklyWorkMinutes = dayItems.reduce((sum, item) => sum + item.workMinutes, 0);
       const weeklyAllowanceWorkMinutes = dayItems.reduce((sum, item) => sum + item.weeklyAllowanceWorkMinutes, 0);
       const weeklyBasePay = dayItems.reduce((sum, item) => sum + item.basePay, 0);
@@ -796,8 +816,11 @@ function formatPayrollWorkDurationCell(item) {
   if (!item?.record) return "";
   if (!isAttendanceWorkStatus(item.record.status)) return "";
   if (!item.rawWorkMinutes) return "";
-  if (!item.inSelectedMonth) return `<span class="payroll-muted-cell">${formatDurationText(item.rawWorkMinutes)} ${formatOutOfMonthLabel(item.dateKey)}</span>`;
-  if (item.isPayable) return formatDurationText(item.workMinutes);
+  if (!item.inSelectedMonth) {
+    const label = `${formatDurationText(item.rawWorkMinutes)} ${formatOutOfMonthLabel(item.dateKey)}`;
+    return item.isMonthlyPayable ? `${formatDurationText(item.workMinutes)}<small class="payroll-muted-cell">${formatOutOfMonthLabel(item.dateKey)} 포함</small>` : `<span class="payroll-muted-cell">${label}</span>`;
+  }
+  if (item.isMonthlyPayable) return formatDurationText(item.workMinutes);
   return `<span class="payroll-muted-cell">${formatDurationText(item.rawWorkMinutes)} 미반영</span>`;
 }
 
@@ -808,7 +831,11 @@ function renderVerificationMark(isVerified, record) {
 
 function renderPayrollInclusionMark(item) {
   if (!item?.record) return "";
-  if (!item.inSelectedMonth) return `<span class="payroll-muted-cell">${formatOutOfMonthLabel(item.dateKey)}</span>`;
+  if (!item.inSelectedMonth) {
+    return item.isMonthlyPayable
+      ? `${renderVerificationMark(true, item.record)}<small class="payroll-muted-cell">${formatOutOfMonthLabel(item.dateKey)} 포함</small>`
+      : `<span class="payroll-muted-cell">${formatOutOfMonthLabel(item.dateKey)}</span>`;
+  }
   return renderVerificationMark(item.isMonthlyPayable, item.record);
 }
 
@@ -820,7 +847,7 @@ function renderWeekVerificationSummary(dayItems, key) {
 }
 
 function renderWeekPayrollInclusionSummary(dayItems) {
-  const records = dayItems.filter((item) => item.record && item.inSelectedMonth);
+  const records = dayItems.filter((item) => item.record && (item.inSelectedMonth || item.isMonthlyPayable));
   if (!records.length) return "-";
   const included = records.filter((item) => item.isMonthlyPayable).length;
   return `${included}/${records.length}`;
@@ -1043,7 +1070,7 @@ function renderPayslip(payroll) {
         </tbody>
       </table>
       <div class="payslip-total">실지급액 ${formatWon(payroll.netPay)}</div>
-      <p class="payroll-confirm-note">직원서명과 매니저확인이 모두 V인 출근/지각 기록만 급여에 반영합니다. 주휴수당은 직원 기본 근무요일과 실제 근퇴기록(대타 포함)을 함께 보고 주 단위로 정산합니다.</p>
+      <p class="payroll-confirm-note">직원서명과 매니저확인이 모두 V인 출근/지각 기록만 급여에 반영합니다. 기본급과 주휴수당은 직원 기본 근무요일과 실제 근퇴기록(대타 포함)을 함께 보고 주차 정산월 기준으로 반영합니다.</p>
       ${payroll.weeklyAllowanceReviewFlags.length ? `<p class="notice">주휴수당 미지급: ${payroll.weeklyAllowanceReviewFlags.map(escapeHtml).join(" / ")}</p>` : ""}
       ${renderWeeklyPayrollTable(payroll, { onePage: true })}
     </article>
