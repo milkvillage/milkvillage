@@ -4,6 +4,7 @@ const SETTINGS_KEY = "milk-village-owner-payroll-settings-v1";
 const UNLOCK_DURATION_MS = 10 * 60 * 1000;
 const WITHHOLDING_RATE = 0.033;
 const MINIMUM_HOURLY_WAGE_2026 = 10320;
+const staffScheduleDayOrder = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
 const els = {
   setupPanel: document.querySelector("#setupPanel"),
@@ -217,10 +218,25 @@ function normalizeStaffMembers(staffMembers) {
       id: staff?.id || `staff-${index}`,
       name: staff?.name || "이름 없음",
       isActive: staff?.isActive !== false,
+      schedule: normalizeStaffSchedule(staff?.schedule),
       sortOrder: Number(staff?.sortOrder || index + 1),
     }))
     .filter((staff) => staff.isActive)
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "ko-KR"));
+}
+
+function normalizeStaffSchedule(schedule = {}) {
+  return staffScheduleDayOrder.reduce((result, dayKey) => {
+    const item = schedule?.[dayKey] || {};
+    const startTime = normalizeTimeValue(item.startTime || item.start || "");
+    const endTime = normalizeTimeValue(item.endTime || item.end || "");
+    result[dayKey] = {
+      enabled: Boolean(item.enabled) && Boolean(startTime && endTime),
+      startTime,
+      endTime,
+    };
+    return result;
+  }, {});
 }
 
 function normalizeAttendanceStatus(status) {
@@ -409,7 +425,7 @@ function renderSummary(payrolls) {
     <div class="summary-card"><span>총 근무시간</span><strong>${formatDurationText(totals.workMinutes)}</strong></div>
     <div class="summary-card"><span>총 지급액</span><strong>${formatWon(totals.grossPay)}</strong></div>
     <div class="summary-card"><span>주휴수당</span><strong>${formatWon(totals.weeklyAllowancePay)}</strong></div>
-    <div class="summary-card"><span>실지급액</span><strong>${formatWon(totals.netPay)}</strong></div>
+    <div class="summary-card summary-card--net"><span>실지급액</span><strong>${formatWon(totals.netPay)}</strong></div>
   `;
 }
 
@@ -476,7 +492,7 @@ function calculatePayroll(staff) {
   const unexcusedAbsenceRecords = absentRecords.filter((record) => normalizeAbsenceType(record.absenceType) === "unexcused");
   const workMinutes = presentRecords.reduce((sum, record) => sum + getRecordWorkMinutes(record), 0);
   const breakMinutes = presentRecords.reduce((sum, record) => sum + normalizeBreakMinutes(record.breakMinutes), 0);
-  const weeklyPayrollSections = buildWeeklyPayrollSections(staffRecords, setting, hourlyRate);
+  const weeklyPayrollSections = buildWeeklyPayrollSections(staffRecords, setting, hourlyRate, staff);
   const weeklyAllowanceReviewFlags = getWeeklyAllowanceReviewFlagsFromSections(weeklyPayrollSections);
   const weeklyAllowanceMinutes = weeklyPayrollSections.reduce((sum, section) => sum + section.weeklyAllowanceMinutes, 0);
   const basePay = Math.round((workMinutes / 60) * hourlyRate);
@@ -509,15 +525,13 @@ function calculatePayroll(staff) {
   };
 }
 
-function buildWeeklyPayrollSections(records, setting, hourlyRate) {
+function buildWeeklyPayrollSections(records, setting, hourlyRate, staff = null) {
   const recordsByDate = new Map(records.map((record) => [record.date, record]));
   const weekKeys = getPayrollWeekKeysForMonth(state.selectedMonth);
 
   return weekKeys
     .map((weekKey, index) => {
       const dateKeys = getWeekDateKeys(weekKey);
-      const weekEndDateKey = dateKeys[dateKeys.length - 1] || "";
-      const settlesThisMonth = isDateInMonth(weekEndDateKey, state.selectedMonth);
       const dayItems = dateKeys.map((dateKey) => {
         const record = recordsByDate.get(dateKey) || null;
         const inSelectedMonth = isDateInMonth(dateKey, state.selectedMonth);
@@ -544,6 +558,8 @@ function buildWeeklyPayrollSections(records, setting, hourlyRate) {
           netBasePay: getNetAmount(basePay, setting),
         };
       });
+      const weeklyAllowanceSettlementMonth = getWeeklyAllowanceSettlementMonth(dateKeys, dayItems, staff);
+      const settlesThisMonth = weeklyAllowanceSettlementMonth === state.selectedMonth;
       const weeklyWorkMinutes = dayItems.reduce((sum, item) => sum + item.workMinutes, 0);
       const weeklyAllowanceWorkMinutes = dayItems.reduce((sum, item) => sum + item.weeklyAllowanceWorkMinutes, 0);
       const weeklyBasePay = dayItems.reduce((sum, item) => sum + item.basePay, 0);
@@ -551,7 +567,8 @@ function buildWeeklyPayrollSections(records, setting, hourlyRate) {
       const weeklyAllowanceExclusionReasons = getWeeklyAllowanceExclusionReasons(dayItems.map((item) => item.record).filter(Boolean));
       const weeklyAllowanceBlocked = setting.weeklyAllowance && settlesThisMonth && weeklyAllowanceExclusionReasons.length > 0;
       const weeklyAllowanceEligible = setting.weeklyAllowance && settlesThisMonth && weeklyAllowanceWorkMinutes >= 15 * 60 && !weeklyAllowanceBlocked;
-      const weeklyAllowanceDeferred = Boolean(setting.weeklyAllowance && !settlesThisMonth);
+      const weeklyAllowanceDeferred = Boolean(setting.weeklyAllowance && weeklyAllowanceSettlementMonth > state.selectedMonth);
+      const weeklyAllowanceSettledBefore = Boolean(setting.weeklyAllowance && weeklyAllowanceSettlementMonth < state.selectedMonth);
       const weeklyAllowanceMinutes = weeklyAllowanceEligible ? Math.min(8 * 60, Math.round(weeklyAllowanceWorkMinutes / 5)) : 0;
       const weeklyAllowancePay = Math.round((weeklyAllowanceMinutes / 60) * hourlyRate);
       const weeklyGrossPay = weeklyBasePay + weeklyAllowancePay;
@@ -572,7 +589,9 @@ function buildWeeklyPayrollSections(records, setting, hourlyRate) {
         weeklyAllowancePay,
         weeklyAllowanceEnabled: Boolean(setting.weeklyAllowance),
         weeklyAllowanceSettlesThisMonth: settlesThisMonth,
+        weeklyAllowanceSettlementMonth,
         weeklyAllowanceDeferred,
+        weeklyAllowanceSettledBefore,
         weeklyAllowanceBlocked,
         weeklyAllowanceExclusionReasons,
         weeklyGrossPay,
@@ -696,6 +715,9 @@ function formatWeeklyAllowanceCell(section) {
   if (!section.weeklyAllowanceEnabled) return "미적용";
   if (section.weeklyAllowanceDeferred) {
     return `<span class="allowance-deferred">다음달 정산</span><small>${formatDurationText(section.weeklyAllowanceWorkMinutes)} 확인</small>`;
+  }
+  if (section.weeklyAllowanceSettledBefore) {
+    return `<span class="allowance-deferred">전월 정산</span>`;
   }
   if (section.weeklyAllowanceBlocked) {
     return `<span class="allowance-blocked">미지급</span><small>${escapeHtml(section.weeklyAllowanceExclusionReasons.join(", "))}</small>`;
@@ -976,7 +998,7 @@ function makeSamplePayroll() {
   samplePayroll.unexcusedAbsenceRecords = samplePayroll.absentRecords.filter((record) => normalizeAbsenceType(record.absenceType) === "unexcused");
   samplePayroll.workMinutes = samplePayroll.presentRecords.reduce((sum, record) => sum + getRecordWorkMinutes(record), 0);
   samplePayroll.breakMinutes = samplePayroll.presentRecords.reduce((sum, record) => sum + normalizeBreakMinutes(record.breakMinutes), 0);
-  samplePayroll.weeklyPayrollSections = buildWeeklyPayrollSections(samplePayroll.records, samplePayroll.setting, samplePayroll.hourlyRate);
+  samplePayroll.weeklyPayrollSections = buildWeeklyPayrollSections(samplePayroll.records, samplePayroll.setting, samplePayroll.hourlyRate, samplePayroll.staff);
   samplePayroll.weeklyAllowanceReviewFlags = getWeeklyAllowanceReviewFlagsFromSections(samplePayroll.weeklyPayrollSections);
   samplePayroll.weeklyAllowanceMinutes = samplePayroll.weeklyPayrollSections.reduce((sum, section) => sum + section.weeklyAllowanceMinutes, 0);
   samplePayroll.basePay = Math.round((samplePayroll.workMinutes / 60) * samplePayroll.hourlyRate);
@@ -1021,7 +1043,7 @@ function renderPayslip(payroll) {
         </tbody>
       </table>
       <div class="payslip-total">실지급액 ${formatWon(payroll.netPay)}</div>
-      <p class="payroll-confirm-note">직원서명과 매니저확인이 모두 V인 출근/지각 기록만 급여에 반영합니다. 주휴수당은 일요일까지 끝난 주 단위로 계산하며, 월말 미완성 주는 다음달 정산에 표시합니다.</p>
+      <p class="payroll-confirm-note">직원서명과 매니저확인이 모두 V인 출근/지각 기록만 급여에 반영합니다. 주휴수당은 주 단위로 계산하며, 월말 주차는 직원의 남은 예정 근무가 없을 때 해당 월에 정산합니다.</p>
       ${payroll.weeklyAllowanceReviewFlags.length ? `<p class="notice">주휴수당 미지급: ${payroll.weeklyAllowanceReviewFlags.map(escapeHtml).join(" / ")}</p>` : ""}
       ${renderWeeklyPayrollTable(payroll, { onePage: true })}
     </article>
@@ -1168,6 +1190,26 @@ function getWeekDateKeys(weekKey) {
 
 function getPayrollWeekKeysForMonth(monthKey) {
   return Array.from(new Set(getMonthDateKeys(monthKey).map(getWeekKey))).sort((a, b) => a.localeCompare(b));
+}
+
+function getWeeklyAllowanceSettlementMonth(dateKeys, dayItems, staff) {
+  const scheduledDates = dateKeys.filter((dateKey) => isStaffScheduledOnDate(staff, dateKey));
+  const recordedDates = dayItems.filter((item) => item.record).map((item) => item.dateKey);
+  const candidateDates = [...scheduledDates, ...recordedDates].sort((a, b) => a.localeCompare(b));
+  const settlementDate = candidateDates[candidateDates.length - 1] || dateKeys[dateKeys.length - 1] || "";
+  return getMonthKeyFromDateKey(settlementDate);
+}
+
+function isStaffScheduledOnDate(staff, dateKey) {
+  const dayKey = getScheduleDayKey(dateKey);
+  const scheduleItem = dayKey ? staff?.schedule?.[dayKey] : null;
+  return Boolean(scheduleItem?.enabled && scheduleItem.startTime && scheduleItem.endTime);
+}
+
+function getScheduleDayKey(dateKey) {
+  const date = parseDateKey(dateKey);
+  if (!date) return "";
+  return staffScheduleDayOrder[(date.getDay() + 6) % 7] || "";
 }
 
 function getMonthDateKeys(monthKey) {
