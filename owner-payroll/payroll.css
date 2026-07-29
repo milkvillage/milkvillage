@@ -647,9 +647,12 @@ h3 {
   padding: 14px;
   border: 2px solid #111;
   background: #fff2a8;
+  background-color: #fff2a8;
   text-align: right;
   font-size: 20px;
   font-weight: 1000;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
 }
 
 .attendance-print-summary {
@@ -738,6 +741,8 @@ h3 {
 
   body {
     background: #fff;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 
   .payroll-shell {
@@ -785,7 +790,13 @@ h3 {
 
   .payslip--payroll .payslip-total {
     padding: 7px;
+    border-color: #111;
+    background: #ffe66d !important;
+    background-color: #ffe66d !important;
+    color: #111;
     font-size: 15px;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 
   .payslip--payroll .payroll-confirm-note,
