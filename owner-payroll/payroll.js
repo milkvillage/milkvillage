@@ -24,6 +24,7 @@ const els = {
   printAllAttendanceButton: document.querySelector("#printAllAttendanceButton"),
   remoteUpdatedText: document.querySelector("#remoteUpdatedText"),
   staffRateList: document.querySelector("#staffRateList"),
+  staffPdfList: document.querySelector("#staffPdfList"),
   summaryGrid: document.querySelector("#summaryGrid"),
   payrollList: document.querySelector("#payrollList"),
   printArea: document.querySelector("#printArea"),
@@ -313,6 +314,7 @@ function render() {
   renderStaffRates();
   const payrolls = calculatePayrolls();
   renderSummary(payrolls);
+  renderStaffPdfList(payrolls);
   renderPayrollList(payrolls);
   els.remoteUpdatedText.textContent = state.remoteUpdatedAt
     ? `근퇴기록 기준: ${formatDateTime(state.remoteUpdatedAt)}`
@@ -367,6 +369,31 @@ function renderStaffRates() {
   });
 }
 
+function renderStaffPdfList(payrolls) {
+  if (!els.staffPdfList) return;
+  if (!payrolls.length) {
+    els.staffPdfList.innerHTML = `<div class="empty-state empty-state--compact">등록된 근무자가 없습니다.</div>`;
+    return;
+  }
+  els.staffPdfList.innerHTML = payrolls
+    .map(
+      (payroll) => `
+        <div class="staff-pdf-card">
+          <div>
+            <strong>${escapeHtml(payroll.staff.name)}</strong>
+            <span>${formatWon(payroll.netPay)}</span>
+          </div>
+          <button class="button button--primary button--small" type="button" data-panel-print-staff="${escapeAttr(payroll.staff.id)}">급여 PDF</button>
+        </div>
+      `,
+    )
+    .join("");
+
+  els.staffPdfList.querySelectorAll("[data-panel-print-staff]").forEach((button) => {
+    button.addEventListener("click", () => printPayslips([button.dataset.panelPrintStaff]));
+  });
+}
+
 function renderSummary(payrolls) {
   const totals = payrolls.reduce(
     (result, payroll) => {
@@ -407,12 +434,13 @@ function renderPayrollList(payrolls) {
             <div class="metric"><span>기본급</span><strong>${formatWon(payroll.basePay)}</strong></div>
             <div class="metric"><span>주휴수당</span><strong>${formatWon(payroll.weeklyAllowancePay)}</strong></div>
             <div class="metric"><span>3.3% 공제</span><strong>${formatWon(payroll.withholdingAmount)}</strong></div>
+            <div class="metric"><span>급여 반영일</span><strong>${payroll.presentRecords.length}일</strong></div>
             <div class="metric"><span>지각</span><strong>${payroll.lateRecords.length}건</strong></div>
             <div class="metric"><span>무단결근</span><strong>${payroll.unexcusedAbsenceRecords.length}건</strong></div>
             <div class="metric"><span>확인 대기</span><strong>${payroll.unconfirmedCount}건</strong></div>
           </div>
           ${payroll.hourlyRate && payroll.hourlyRate < MINIMUM_HOURLY_WAGE_2026 ? `<p class="notice">시급이 2026년 최저임금 ${formatWon(MINIMUM_HOURLY_WAGE_2026)}보다 낮습니다.</p>` : ""}
-          ${payroll.unconfirmedCount ? `<p class="notice">매니저 서명이 없는 근퇴기록이 포함되어 있습니다.</p>` : ""}
+          ${payroll.unconfirmedCount ? `<p class="notice">직원서명 또는 매니저확인이 X인 근무기록은 급여 계산에서 제외됩니다.</p>` : ""}
           ${payroll.weeklyAllowanceReviewFlags.length ? `<p class="notice">주휴수당 제외 검토: ${payroll.weeklyAllowanceReviewFlags.map(escapeHtml).join(" / ")}</p>` : ""}
           ${renderWeeklyPayrollTable(payroll, { compact: true })}
           <div class="button-row">
@@ -442,11 +470,12 @@ function calculatePayroll(staff) {
   const records = state.attendanceRecords
     .filter((record) => record.staffId === staff.id && String(record.date || "").startsWith(state.selectedMonth))
     .sort((a, b) => a.date.localeCompare(b.date));
-  const presentRecords = records.filter((record) => isAttendanceWorkStatus(record.status) && record.actualStart && record.actualEnd);
+  const workRecords = records.filter((record) => isAttendanceWorkStatus(record.status) && record.actualStart && record.actualEnd);
+  const presentRecords = workRecords.filter(isPayrollPayableRecord);
   const lateRecords = records.filter((record) => record.status === "late");
   const absentRecords = records.filter((record) => record.status === "absent");
   const unexcusedAbsenceRecords = absentRecords.filter((record) => normalizeAbsenceType(record.absenceType) === "unexcused");
-  const weeklyAllowanceReviewFlags = getWeeklyAllowanceReviewFlags(records);
+  const weeklyAllowanceReviewFlags = getWeeklyAllowanceReviewFlags(records.filter(isPayrollVerifiedRecord));
   const workMinutes = presentRecords.reduce((sum, record) => sum + getRecordWorkMinutes(record), 0);
   const breakMinutes = presentRecords.reduce((sum, record) => sum + normalizeBreakMinutes(record.breakMinutes), 0);
   const weeklyPayrollSections = buildWeeklyPayrollSections(records, setting, hourlyRate);
@@ -456,12 +485,13 @@ function calculatePayroll(staff) {
   const grossPay = basePay + weeklyAllowancePay;
   const withholdingAmount = setting.withholding ? Math.floor(grossPay * WITHHOLDING_RATE) : 0;
   const netPay = grossPay - withholdingAmount;
-  const unconfirmedCount = presentRecords.filter((record) => !(hasEmployeeSignature(record) && hasManagerSignature(record))).length;
+  const unconfirmedCount = workRecords.filter((record) => !isPayrollVerifiedRecord(record)).length;
   return {
     staff,
     setting,
     hourlyRate,
     records,
+    workRecords,
     presentRecords,
     lateRecords,
     absentRecords,
@@ -481,28 +511,34 @@ function calculatePayroll(staff) {
 }
 
 function buildWeeklyPayrollSections(records, setting, hourlyRate) {
+  const recordsByDate = new Map(records.map((record) => [record.date, record]));
   const weekly = new Map();
-  records.forEach((record) => {
-    const key = getWeekKey(record.date);
-    if (!weekly.has(key)) weekly.set(key, []);
-    weekly.get(key).push(record);
+  getMonthDateKeys(state.selectedMonth).forEach((dateKey) => {
+    const weekKey = getWeekKey(dateKey);
+    if (!weekly.has(weekKey)) weekly.set(weekKey, []);
+    weekly.get(weekKey).push(dateKey);
   });
 
   return Array.from(weekly.entries())
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([weekKey, weekRecords], index) => {
-      const recordsByDate = new Map(weekRecords.map((record) => [record.date, record]));
-      const dayItems = getWeekDateKeys(weekKey).map((dateKey) => {
+    .map(([weekKey, dateKeys], index) => {
+      const dayItems = dateKeys.map((dateKey) => {
         const record = recordsByDate.get(dateKey) || null;
         const isWorkRecord = isAttendanceWorkStatus(record?.status) && record?.actualStart && record?.actualEnd;
+        const isPayable = isPayrollPayableRecord(record);
         const workMinutes = isWorkRecord ? getRecordWorkMinutes(record) : 0;
-        const basePay = Math.round((workMinutes / 60) * hourlyRate);
+        const payableMinutes = isPayable ? workMinutes : 0;
+        const basePay = Math.round((payableMinutes / 60) * hourlyRate);
         return {
           dateKey,
           record,
           statusText: record ? formatPayrollAttendanceStatus(record) : "",
           statusClass: record ? getPayrollStatusClass(record) : "",
-          workMinutes,
+          workMinutes: payableMinutes,
+          rawWorkMinutes: workMinutes,
+          employeeSigned: Boolean(record && hasEmployeeSignature(record)),
+          managerConfirmed: Boolean(record && hasManagerSignature(record)),
+          isPayable,
           hourlyRate: record ? hourlyRate : 0,
           basePay,
           netBasePay: getNetAmount(basePay, setting),
@@ -521,9 +557,9 @@ function buildWeeklyPayrollSections(records, setting, hourlyRate) {
       return {
         weekKey,
         label: formatPayrollWeekTitle(index),
-        dateRange: formatWeekLabel(weekKey),
+        dateRange: formatPayrollDateRange(dateKeys),
         dayItems,
-        statusSummary: summarizeWeekStatuses(weekRecords),
+        statusSummary: summarizeWeekStatuses(dayItems.map((item) => item.record).filter(Boolean)),
         weeklyWorkMinutes,
         weeklyBasePay,
         weeklyBaseNetPay,
@@ -575,8 +611,18 @@ function renderWeeklyPayrollSection(section, setting) {
               escapeHtml(section.statusSummary),
             )}
             ${renderWeeklyPayrollRow(
+              "직원서명",
+              section.dayItems.map((item) => renderVerificationMark(item.employeeSigned, item.record)),
+              renderWeekVerificationSummary(section.dayItems, "employeeSigned"),
+            )}
+            ${renderWeeklyPayrollRow(
+              "매니저확인",
+              section.dayItems.map((item) => renderVerificationMark(item.managerConfirmed, item.record)),
+              renderWeekVerificationSummary(section.dayItems, "managerConfirmed"),
+            )}
+            ${renderWeeklyPayrollRow(
               "근무시간",
-              section.dayItems.map((item) => formatPayrollDurationCell(item.workMinutes)),
+              section.dayItems.map((item) => formatPayrollWorkDurationCell(item)),
               formatDurationText(section.weeklyWorkMinutes),
             )}
             ${renderWeeklyPayrollRow(
@@ -626,6 +672,14 @@ function getNetAmount(amount, setting) {
   const safeAmount = Math.round(Number(amount) || 0);
   if (!setting?.withholding) return safeAmount;
   return safeAmount - Math.floor(safeAmount * WITHHOLDING_RATE);
+}
+
+function isPayrollVerifiedRecord(record) {
+  return Boolean(record && hasEmployeeSignature(record) && hasManagerSignature(record));
+}
+
+function isPayrollPayableRecord(record) {
+  return Boolean(record && isAttendanceWorkStatus(record.status) && record.actualStart && record.actualEnd && isPayrollVerifiedRecord(record));
 }
 
 function formatPayrollAttendanceStatus(record) {
@@ -679,6 +733,26 @@ function formatPayrollWeekTitle(index) {
 
 function formatPayrollDurationCell(minutes) {
   return minutes ? formatDurationText(minutes) : "";
+}
+
+function formatPayrollWorkDurationCell(item) {
+  if (!item?.record) return "";
+  if (!isAttendanceWorkStatus(item.record.status)) return "";
+  if (!item.rawWorkMinutes) return "";
+  if (item.isPayable) return formatDurationText(item.workMinutes);
+  return `<span class="payroll-muted-cell">${formatDurationText(item.rawWorkMinutes)} 미반영</span>`;
+}
+
+function renderVerificationMark(isVerified, record) {
+  if (!record) return "";
+  return `<span class="verify-mark ${isVerified ? "verify-mark--yes" : "verify-mark--no"}">${isVerified ? "V" : "X"}</span>`;
+}
+
+function renderWeekVerificationSummary(dayItems, key) {
+  const records = dayItems.filter((item) => item.record);
+  if (!records.length) return "-";
+  const verified = records.filter((item) => item[key]).length;
+  return `${verified}/${records.length}`;
 }
 
 function formatPayrollRateCell(rate) {
@@ -843,6 +917,7 @@ function makeSamplePayroll() {
         adjustmentReason: "개인 사정",
       },
     ],
+    workRecords: [],
     presentRecords: [],
     lateRecords: [],
     absentRecords: [],
@@ -859,11 +934,12 @@ function makeSamplePayroll() {
     netPay: 0,
     unconfirmedCount: 0,
   };
-  samplePayroll.presentRecords = samplePayroll.records.filter((record) => isAttendanceWorkStatus(record.status));
+  samplePayroll.workRecords = samplePayroll.records.filter((record) => isAttendanceWorkStatus(record.status) && record.actualStart && record.actualEnd);
+  samplePayroll.presentRecords = samplePayroll.workRecords.filter(isPayrollPayableRecord);
   samplePayroll.lateRecords = samplePayroll.records.filter((record) => record.status === "late");
   samplePayroll.absentRecords = samplePayroll.records.filter((record) => record.status === "absent");
   samplePayroll.unexcusedAbsenceRecords = samplePayroll.absentRecords.filter((record) => normalizeAbsenceType(record.absenceType) === "unexcused");
-  samplePayroll.weeklyAllowanceReviewFlags = getWeeklyAllowanceReviewFlags(samplePayroll.records);
+  samplePayroll.weeklyAllowanceReviewFlags = getWeeklyAllowanceReviewFlags(samplePayroll.records.filter(isPayrollVerifiedRecord));
   samplePayroll.workMinutes = samplePayroll.presentRecords.reduce((sum, record) => sum + getRecordWorkMinutes(record), 0);
   samplePayroll.breakMinutes = samplePayroll.presentRecords.reduce((sum, record) => sum + normalizeBreakMinutes(record.breakMinutes), 0);
   samplePayroll.weeklyPayrollSections = buildWeeklyPayrollSections(samplePayroll.records, samplePayroll.setting, samplePayroll.hourlyRate);
@@ -873,6 +949,7 @@ function makeSamplePayroll() {
   samplePayroll.grossPay = samplePayroll.basePay + samplePayroll.weeklyAllowancePay;
   samplePayroll.withholdingAmount = Math.floor(samplePayroll.grossPay * WITHHOLDING_RATE);
   samplePayroll.netPay = samplePayroll.grossPay - samplePayroll.withholdingAmount;
+  samplePayroll.unconfirmedCount = samplePayroll.workRecords.filter((record) => !isPayrollVerifiedRecord(record)).length;
   return samplePayroll;
 }
 
@@ -893,7 +970,8 @@ function renderPayslip(payroll) {
         <tbody>
           <tr><th>근무자</th><td>${escapeHtml(payroll.staff.name)}</td><th>시급</th><td>${formatWon(payroll.hourlyRate)}</td></tr>
           <tr><th>총 근무시간</th><td>${formatDurationText(payroll.workMinutes)}</td><th>총 휴게시간</th><td>${formatDurationText(payroll.breakMinutes)}</td></tr>
-          <tr><th>근무일수</th><td>${payroll.presentRecords.length}일</td><th>지각/결근</th><td>${payroll.lateRecords.length}건 / ${payroll.absentRecords.length}건</td></tr>
+          <tr><th>급여 반영일</th><td>${payroll.presentRecords.length}일</td><th>기록 근무일</th><td>${payroll.workRecords.length}일</td></tr>
+          <tr><th>지각/결근</th><td>${payroll.lateRecords.length}건 / ${payroll.absentRecords.length}건</td><th>확인 대기</th><td>${payroll.unconfirmedCount}건</td></tr>
         </tbody>
       </table>
       <table class="payslip-table">
@@ -908,12 +986,13 @@ function renderPayslip(payroll) {
         </tbody>
       </table>
       <div class="payslip-total">실지급액 ${formatWon(payroll.netPay)}</div>
+      <p class="payroll-confirm-note">직원서명과 매니저확인이 모두 V인 출근/지각 기록만 급여에 반영했습니다.</p>
       ${payroll.weeklyAllowanceReviewFlags.length ? `<p class="notice">주휴수당 제외 검토: ${payroll.weeklyAllowanceReviewFlags.map(escapeHtml).join(" / ")}</p>` : ""}
       ${renderWeeklyPayrollTable(payroll)}
       <h3>근퇴기록 상세</h3>
       <table class="payslip-table">
         <thead>
-          <tr><th>날짜</th><th>구분</th><th>시간</th><th>휴게</th><th>근무시간</th><th>확인</th></tr>
+          <tr><th>날짜</th><th>구분</th><th>시간</th><th>휴게</th><th>근무시간</th><th>직원서명</th><th>매니저확인</th><th>급여반영</th></tr>
         </thead>
         <tbody>
           ${
@@ -927,12 +1006,14 @@ function renderPayslip(payroll) {
                         <td>${isAttendanceWorkStatus(record.status) ? `${record.actualStart || "--:--"}~${record.actualEnd || "--:--"}` : "-"}</td>
                         <td>${formatBreakDuration(record.breakMinutes)}</td>
                         <td>${isAttendanceWorkStatus(record.status) ? formatDurationText(getRecordWorkMinutes(record)) : "0분"}</td>
-                        <td>${isAttendanceRecordConfirmed(record) ? "완료" : "대기"}</td>
+                        <td>${renderVerificationMark(hasEmployeeSignature(record), record)}</td>
+                        <td>${renderVerificationMark(hasManagerSignature(record), record)}</td>
+                        <td>${renderVerificationMark(isPayrollPayableRecord(record), record)}</td>
                       </tr>
                     `,
                   )
                   .join("")
-              : `<tr><td colspan="6">해당 월 근퇴기록 없음</td></tr>`
+              : `<tr><td colspan="8">해당 월 근퇴기록 없음</td></tr>`
           }
         </tbody>
       </table>
@@ -957,7 +1038,8 @@ function renderAttendanceSheet(payroll) {
 
       <section class="attendance-print-summary">
         <div><span>근무자</span><strong>${escapeHtml(payroll.staff.name)}</strong></div>
-        <div><span>근무일</span><strong>${payroll.presentRecords.length}일</strong></div>
+        <div><span>기록 근무일</span><strong>${payroll.workRecords.length}일</strong></div>
+        <div><span>급여 반영일</span><strong>${payroll.presentRecords.length}일</strong></div>
         <div><span>지각</span><strong>${payroll.lateRecords.length}건</strong></div>
         <div><span>결근</span><strong>${payroll.absentRecords.length}건</strong></div>
         <div><span>무단결근</span><strong>${payroll.unexcusedAbsenceRecords.length}건</strong></div>
@@ -981,7 +1063,8 @@ function renderAttendanceSheet(payroll) {
             <th>퇴근</th>
             <th>휴게</th>
             <th>인정 근무</th>
-            <th>확인</th>
+            <th>직원서명</th>
+            <th>매니저확인</th>
             <th>비고</th>
           </tr>
         </thead>
@@ -989,7 +1072,7 @@ function renderAttendanceSheet(payroll) {
           ${
             payroll.records.length
               ? payroll.records.map(renderAttendanceSheetRow).join("")
-              : `<tr><td colspan="8">해당 월 근퇴기록 없음</td></tr>`
+              : `<tr><td colspan="9">해당 월 근퇴기록 없음</td></tr>`
           }
         </tbody>
       </table>
@@ -1014,7 +1097,8 @@ function renderAttendanceSheetRow(record) {
       <td>${isWorkRecord ? escapeHtml(record.actualEnd || "--:--") : "-"}</td>
       <td>${formatBreakDuration(record.breakMinutes)}</td>
       <td>${isWorkRecord ? formatDurationText(getRecordWorkMinutes(record)) : "0분"}</td>
-      <td>${confirmText}</td>
+      <td>${renderVerificationMark(hasEmployeeSignature(record), record)}</td>
+      <td>${renderVerificationMark(hasManagerSignature(record), record)}</td>
       <td>${escapeHtml(note)}</td>
     </tr>
   `;
@@ -1074,6 +1158,19 @@ function getWeekDateKeys(weekKey) {
     date.setDate(startDate.getDate() + index);
     return formatDateKey(date);
   });
+}
+
+function getMonthDateKeys(monthKey) {
+  const [year, month] = String(monthKey || "").split("-").map(Number);
+  if (!year || !month) return [];
+  const lastDate = new Date(year, month, 0).getDate();
+  return Array.from({ length: lastDate }, (_, index) => `${year}-${String(month).padStart(2, "0")}-${String(index + 1).padStart(2, "0")}`);
+}
+
+function formatPayrollDateRange(dateKeys) {
+  if (!Array.isArray(dateKeys) || !dateKeys.length) return "";
+  if (dateKeys.length === 1) return formatAttendanceDateLabel(dateKeys[0]);
+  return `${formatAttendanceDateLabel(dateKeys[0])}~${formatAttendanceDateLabel(dateKeys[dateKeys.length - 1])}`;
 }
 
 function formatWeekLabel(weekKey) {

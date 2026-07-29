@@ -179,6 +179,10 @@ h3 {
   top: 116px;
   display: grid;
   gap: 16px;
+  max-height: calc(100vh - 136px);
+  overflow-y: auto;
+  padding-right: 4px;
+  overscroll-behavior: contain;
 }
 
 .panel-card {
@@ -208,6 +212,34 @@ h3 {
 .staff-rate-list {
   display: grid;
   gap: 10px;
+}
+
+.staff-pdf-list {
+  display: grid;
+  gap: 10px;
+}
+
+.staff-pdf-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfc;
+}
+
+.staff-pdf-card strong,
+.staff-pdf-card span {
+  display: block;
+}
+
+.staff-pdf-card span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 900;
 }
 
 .rate-card {
@@ -467,6 +499,33 @@ h3 {
   gap: 2px;
 }
 
+.verify-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 1000;
+}
+
+.verify-mark--yes {
+  background: #dcf7e2;
+  color: #147a37;
+}
+
+.verify-mark--no {
+  background: #ffe1df;
+  color: var(--danger);
+}
+
+.payroll-muted-cell {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .weekly-payroll-table small,
 .payroll-money-stack small {
   display: block;
@@ -492,6 +551,21 @@ h3 {
   background: #fff;
   color: var(--muted);
   text-align: center;
+  font-weight: 900;
+}
+
+.empty-state--compact {
+  padding: 16px;
+}
+
+.payroll-confirm-note {
+  margin: 10px 0 14px;
+  padding: 10px 12px;
+  border: 1px solid #cfe6e2;
+  border-radius: 8px;
+  background: #eef8f6;
+  color: #0b5f59;
+  font-size: 13px;
   font-weight: 900;
 }
 
@@ -619,6 +693,9 @@ h3 {
 
   .control-panel {
     position: static;
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
   }
 
   .summary-grid,
@@ -696,6 +773,12 @@ h3 {
   .payroll-status {
     min-height: 18px;
     padding: 2px 4px;
+    font-size: 8px;
+  }
+
+  .verify-mark {
+    width: 18px;
+    height: 18px;
     font-size: 8px;
   }
 
