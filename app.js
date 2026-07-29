@@ -3458,9 +3458,10 @@ function attendanceRecordStatusText(record) {
 function attendanceTimingDeltaMinutes(record) {
   if (!isAttendanceWorkStatus(record?.status)) return null;
   const scheduledMinutes = minutesBetween(record.scheduledStart, record.scheduledEnd);
-  const actualMinutes = minutesBetween(record.actualStart, record.actualEnd);
-  if (scheduledMinutes === null || actualMinutes === null) return null;
-  return actualMinutes - scheduledMinutes;
+  const actualGrossMinutes = minutesBetween(record.actualStart, record.actualEnd);
+  if (scheduledMinutes === null || actualGrossMinutes === null) return null;
+  const actualWorkMinutes = Math.max(0, actualGrossMinutes - normalizeBreakMinutes(record.breakMinutes));
+  return actualWorkMinutes - scheduledMinutes;
 }
 
 function attendanceLateMinutes(record) {
