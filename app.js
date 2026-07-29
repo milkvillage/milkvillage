@@ -2876,9 +2876,7 @@ function renderAttendanceScreen() {
   const selectedRecord = selectedStaff ? getAttendanceRecord(selectedDate, selectedStaff.id) : null;
   const timingValues = getAttendanceTimingValues(selectedStaff, selectedDate, selectedRecord);
   const employeeSignatureLocked = hasEmployeeSignature(selectedRecord);
-  const managerCanSign = Boolean(
-    isAttendanceWorkStatus(selectedRecord?.status) && hasEmployeeSignature(selectedRecord) && !hasManagerSignature(selectedRecord),
-  );
+  const managerCanSign = Boolean(selectedRecord && hasEmployeeSignature(selectedRecord) && !hasManagerSignature(selectedRecord));
   const managerSignatureLocked = !managerCanSign;
   const attendanceDraftKey = selectedStaff ? getAttendanceDraftKey(selectedDate, selectedStaff.id) : "";
   if (!attendanceDraftKey || selectedRecord || state.pendingAttendanceKey !== attendanceDraftKey) {
@@ -2997,7 +2995,7 @@ function renderAttendanceScreen() {
               <canvas class="signature-pad" id="managerSignaturePad" aria-label="매니저 서명 입력"></canvas>
               <div class="signature-actions">
                 <button class="button button--primary" type="button" id="confirmManagerAttendance" ${managerCanSign ? "" : "disabled"}>확인</button>
-                <span class="signature-help">${managerCanSign ? "관리자 PIN 확인 후 서명하고 확인하세요." : "근무자 출근 기록 후 매니저 확인이 가능합니다."}</span>
+                <span class="signature-help">${managerCanSign ? "관리자 PIN 확인 후 서명하고 확인하세요." : "근무자 기록 후 매니저 확인이 가능합니다."}</span>
               </div>
             </div>
           </div>
@@ -3304,8 +3302,8 @@ function confirmManagerAttendance(container) {
     return;
   }
   const record = getAttendanceRecord(getSelectedAttendanceDate(), staff.id);
-  if (!record || !isAttendanceWorkStatus(record.status)) {
-    alert("출근 또는 지각 기록을 먼저 저장해주세요.");
+  if (!record || !hasEmployeeSignature(record)) {
+    alert("근무자 기록과 서명을 먼저 저장해주세요.");
     return;
   }
   const managerSignature = getSignaturePadPayload(container.querySelector("#managerSignaturePad"));
@@ -3320,6 +3318,7 @@ function confirmManagerAttendance(container) {
     staffId: record.staffId,
     staffName: staff.name,
     status: record.status,
+    absenceType: record.absenceType,
     scheduledStart: record.scheduledStart,
     scheduledEnd: record.scheduledEnd,
     actualStart: record.actualStart,
@@ -3334,8 +3333,8 @@ function confirmManagerAttendance(container) {
 function saveManagerAttendance(draft) {
   if (!draft) return;
   const record = getAttendanceRecord(draft.date, draft.staffId);
-  if (!record || !isAttendanceWorkStatus(record.status)) {
-    alert("출근 또는 지각 기록을 먼저 저장해주세요.");
+  if (!record || !hasEmployeeSignature(record)) {
+    alert("근무자 기록과 서명을 먼저 저장해주세요.");
     renderAttendanceScreen();
     return;
   }
@@ -3436,7 +3435,7 @@ function renderAttendanceCalendarChip(record) {
 }
 
 function isSignedPresentRecord(record) {
-  return isAttendanceWorkStatus(record?.status) && hasEmployeeSignature(record) && hasManagerSignature(record);
+  return Boolean(record && hasEmployeeSignature(record) && hasManagerSignature(record));
 }
 
 function attendanceRecordStateClass(record) {
@@ -3451,7 +3450,7 @@ function attendanceRecordStatusText(record) {
       ? isSignedPresentRecord(record)
         ? `${attendanceStatusLabel(record?.status)} 확인 완료`
         : `${attendanceStatusLabel(record?.status)} 확인 대기`
-      : attendanceAbsenceTypeLabel(record?.absenceType);
+      : `${attendanceAbsenceTypeLabel(record?.absenceType)} ${isSignedPresentRecord(record) ? "확인 완료" : "확인 대기"}`;
   const timingText = attendanceTimingSummary(record);
   return timingText ? `${baseText} ${timingText}` : baseText;
 }

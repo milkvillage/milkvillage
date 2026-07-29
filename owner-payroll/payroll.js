@@ -456,7 +456,7 @@ function renderPayrollList(payrolls) {
             <div class="metric"><span>확인 대기</span><strong>${payroll.unconfirmedCount}건</strong></div>
           </div>
           ${payroll.hourlyRate && payroll.hourlyRate < MINIMUM_HOURLY_WAGE_2026 ? `<p class="notice">시급이 2026년 최저임금 ${formatWon(MINIMUM_HOURLY_WAGE_2026)}보다 낮습니다.</p>` : ""}
-          ${payroll.unconfirmedCount ? `<p class="notice">직원서명 또는 매니저확인이 X인 근무기록은 급여 계산에서 제외됩니다.</p>` : ""}
+          ${payroll.unconfirmedCount ? `<p class="notice">직원서명 또는 매니저확인이 X인 근퇴기록이 있습니다. 출근/지각 기록은 확인 완료 시 급여에 반영됩니다.</p>` : ""}
           ${payroll.weeklyAllowanceReviewFlags.length ? `<p class="notice">주휴수당 미지급: ${payroll.weeklyAllowanceReviewFlags.map(escapeHtml).join(" / ")}</p>` : ""}
           ${renderWeeklyPayrollTable(payroll, { compact: true })}
           <div class="button-row">
@@ -500,7 +500,7 @@ function calculatePayroll(staff) {
   const grossPay = basePay + weeklyAllowancePay;
   const withholdingAmount = setting.withholding ? Math.floor(grossPay * WITHHOLDING_RATE) : 0;
   const netPay = grossPay - withholdingAmount;
-  const unconfirmedCount = workRecords.filter((record) => !isPayrollVerifiedRecord(record)).length;
+  const unconfirmedCount = records.filter((record) => !isAttendanceRecordConfirmed(record)).length;
   return {
     staff,
     setting,
@@ -901,15 +901,14 @@ function formatAttendanceRecordStatus(record) {
 
 function isAttendanceRecordConfirmed(record) {
   if (!record) return false;
-  if (isAttendanceWorkStatus(record.status)) return hasEmployeeSignature(record) && hasManagerSignature(record);
-  return hasEmployeeSignature(record);
+  return hasEmployeeSignature(record) && hasManagerSignature(record);
 }
 
 function formatAttendanceRecordNote(record, confirmText = "") {
   const notes = [];
   if (record?.adjustmentReason) notes.push(record.adjustmentReason);
   if (record?.status === "absent") notes.push(attendanceAbsenceTypeLabel(record.absenceType));
-  if (record?.status !== "absent" && confirmText === "대기") notes.push("매니저 확인 필요");
+  if (confirmText === "대기") notes.push("매니저 확인 필요");
   return notes.join(" / ");
 }
 
@@ -1033,7 +1032,7 @@ function makeSamplePayroll() {
   samplePayroll.grossPay = samplePayroll.basePay + samplePayroll.weeklyAllowancePay;
   samplePayroll.withholdingAmount = Math.floor(samplePayroll.grossPay * WITHHOLDING_RATE);
   samplePayroll.netPay = samplePayroll.grossPay - samplePayroll.withholdingAmount;
-  samplePayroll.unconfirmedCount = samplePayroll.workRecords.filter((record) => !isPayrollVerifiedRecord(record)).length;
+  samplePayroll.unconfirmedCount = samplePayroll.records.filter((record) => !isAttendanceRecordConfirmed(record)).length;
   return samplePayroll;
 }
 
