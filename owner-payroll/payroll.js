@@ -1043,7 +1043,7 @@ function renderPayslip(payroll) {
         </tbody>
       </table>
       <div class="payslip-total">실지급액 ${formatWon(payroll.netPay)}</div>
-      <p class="payroll-confirm-note">직원서명과 매니저확인이 모두 V인 출근/지각 기록만 급여에 반영합니다. 주휴수당은 주 단위로 계산하며, 월말 주차는 직원의 남은 예정 근무가 없을 때 해당 월에 정산합니다.</p>
+      <p class="payroll-confirm-note">직원서명과 매니저확인이 모두 V인 출근/지각 기록만 급여에 반영합니다. 주휴수당은 직원 기본 근무요일과 실제 근퇴기록(대타 포함)을 함께 보고 주 단위로 정산합니다.</p>
       ${payroll.weeklyAllowanceReviewFlags.length ? `<p class="notice">주휴수당 미지급: ${payroll.weeklyAllowanceReviewFlags.map(escapeHtml).join(" / ")}</p>` : ""}
       ${renderWeeklyPayrollTable(payroll, { onePage: true })}
     </article>
@@ -1194,16 +1194,22 @@ function getPayrollWeekKeysForMonth(monthKey) {
 
 function getWeeklyAllowanceSettlementMonth(dateKeys, dayItems, staff) {
   const scheduledDates = dateKeys.filter((dateKey) => isStaffScheduledOnDate(staff, dateKey));
-  const recordedDates = dayItems.filter((item) => item.record).map((item) => item.dateKey);
-  const candidateDates = [...scheduledDates, ...recordedDates].sort((a, b) => a.localeCompare(b));
+  const actualRecordDates = dayItems.filter((item) => item.record).map((item) => item.dateKey);
+  const candidateDates = Array.from(new Set([...scheduledDates, ...actualRecordDates])).sort((a, b) => a.localeCompare(b));
   const settlementDate = candidateDates[candidateDates.length - 1] || dateKeys[dateKeys.length - 1] || "";
   return getMonthKeyFromDateKey(settlementDate);
 }
 
 function isStaffScheduledOnDate(staff, dateKey) {
+  return getStaffScheduledWorkMinutes(staff, dateKey) > 0;
+}
+
+function getStaffScheduledWorkMinutes(staff, dateKey) {
   const dayKey = getScheduleDayKey(dateKey);
   const scheduleItem = dayKey ? staff?.schedule?.[dayKey] : null;
-  return Boolean(scheduleItem?.enabled && scheduleItem.startTime && scheduleItem.endTime);
+  if (!scheduleItem?.enabled) return 0;
+  const minutes = minutesBetween(scheduleItem.startTime, scheduleItem.endTime);
+  return minutes === null ? 0 : Math.max(0, minutes);
 }
 
 function getScheduleDayKey(dateKey) {
