@@ -216,6 +216,7 @@ const state = {
   selectedManualId: null,
   selectedAdminManualId: null,
   selectedAlarmId: null,
+  summaryDate: todayDateKey(),
   analysisMode: "weekday",
   operatorName: "",
   loadingVariantId: null,
@@ -347,6 +348,33 @@ function dateKeyFromIso(iso) {
   const date = new Date(iso);
   if (!Number.isFinite(date.getTime())) return "";
   return todayDateKey(date);
+}
+
+function dateFromDateKey(dateKey) {
+  const [year, month, date] = String(dateKey || "").split("-").map(Number);
+  if (!year || !month || !date) return null;
+  const value = new Date(year, month - 1, date);
+  return Number.isFinite(value.getTime()) ? value : null;
+}
+
+function shiftDateKey(dateKey, offsetDays) {
+  const date = dateFromDateKey(dateKey) || new Date();
+  date.setDate(date.getDate() + Number(offsetDays || 0));
+  return todayDateKey(date);
+}
+
+function recentDateKeys(limit = 7) {
+  const today = todayDateKey();
+  return Array.from({ length: limit }, (_, index) => shiftDateKey(today, -index));
+}
+
+function formatSummaryDateTabLabel(dateKey) {
+  const today = todayDateKey();
+  if (dateKey === today) return "오늘";
+  if (dateKey === shiftDateKey(today, -1)) return "어제";
+  const date = dateFromDateKey(dateKey);
+  if (!date) return dateKey;
+  return new Intl.DateTimeFormat("ko-KR", { month: "2-digit", day: "2-digit", weekday: "short" }).format(date);
 }
 
 function timeText(iso) {
@@ -3940,7 +3968,7 @@ function renderAdminScreen() {
   if (state.adminMenu === "logs") state.adminMenu = "prepLogs";
 
   const menuLabels = [
-    ["summary", "오늘 요약"],
+    ["summary", "요약"],
     ["operationChecks", "운영 체크 관리"],
     ["serviceManuals", "응대 메뉴얼 관리"],
     ["recipes", "레시피 관리"],
@@ -4069,78 +4097,234 @@ function renderChecklistSummaryCard(sectionStat, date) {
   `;
 }
 
+function getSelectedSummaryDate() {
+  const dates = recentDateKeys(7);
+  if (!dates.includes(state.summaryDate)) state.summaryDate = dates[0];
+  return state.summaryDate;
+}
+
+function getHandoverNotesForDate(date) {
+  return (db.operations?.handoverNotes || [])
+    .filter((note) => note.date === date)
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+}
+
+function getAttendanceRecordsForDate(date) {
+  return (db.operations?.attendanceRecords || [])
+    .filter((record) => record.date === date)
+    .sort((a, b) => String(a.staffName || "").localeCompare(String(b.staffName || ""), "ko-KR"));
+}
+
+function getAlarmEventsForDate(date) {
+  return db.alarmEventLogs
+    .filter((log) => dateKeyFromIso(log.triggeredAt) === date)
+    .sort((a, b) => new Date(a.triggeredAt) - new Date(b.triggeredAt));
+}
+
+function getPrepBatchesForDate(date, includeCanceled = true) {
+  return db.prepBatches
+    .filter((batch) => dateKeyFromIso(batch.createdAt) === date)
+    .filter((batch) => includeCanceled || batch.status === "active")
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+}
+
+function renderSummaryHandoverList(notes, emptyText) {
+  return notes.length
+    ? `<div class="handover-list handover-list--compact">
+        ${notes
+          .map(
+            (note) => `
+              <article class="handover-item ${note.status === "resolved" ? "is-resolved" : ""}">
+                <div>
+                  <strong>${escapeHtml(note.category)}</strong>
+                  <p>${escapeHtml(note.message)}</p>
+                  <span>
+                    ${dateTimeText(note.createdAt)} · ${escapeHtml(note.author)}
+                    ${
+                      note.status === "resolved"
+                        ? ` · 처리 ${note.resolvedAt ? dateTimeText(note.resolvedAt) : ""}${note.resolvedBy ? ` · ${escapeHtml(note.resolvedBy)}` : ""}`
+                        : " · 미처리"
+                    }
+                  </span>
+                </div>
+              </article>
+            `,
+          )
+          .join("")}
+      </div>`
+    : `<div class="empty-state">${emptyText}</div>`;
+}
+
+function renderSummaryAttendanceList(records) {
+  return records.length
+    ? `<ul class="compact-list">
+        ${records
+          .map(
+            (record) => `
+              <li>
+                <strong>${escapeHtml(record.staffName || "이름 없음")}</strong>
+                <span>${escapeHtml(attendanceRecordedWorkText(record) || attendanceStatusLabel(record.status))} · ${
+                  isSignedPresentRecord(record) ? "확인 완료" : "확인 대기"
+                }</span>
+              </li>
+            `,
+          )
+          .join("")}
+      </ul>`
+    : `<div class="empty-state">이 날짜의 근퇴 기록이 없습니다.</div>`;
+}
+
+function renderSummaryAlarmList(events) {
+  return events.length
+    ? `<ul class="compact-list">
+        ${events
+          .map(
+            (event) => `
+              <li>
+                <strong>${escapeHtml(timeText(event.triggeredAt))} · ${escapeHtml(event.alarmTitle || "알림")}</strong>
+                <span>${escapeHtml(alarmProcessingStatusLabel(event))} · ${escapeHtml(alarmProcessingDetailText(event))}</span>
+              </li>
+            `,
+          )
+          .join("")}
+      </ul>`
+    : `<div class="empty-state">이 날짜에 울린 알림이 없습니다.</div>`;
+}
+
+function renderSummaryPrepList(batches) {
+  return batches.length
+    ? `<ul class="compact-list">
+        ${batches
+          .map(
+            (batch) => `
+              <li>
+                <strong>${escapeHtml(timeText(batch.createdAt))}</strong>
+                <span>${escapeHtml(batch.recipeName)} ${escapeHtml(batch.variantLabel)}${batch.status === "canceled" ? " · 취소" : ""}</span>
+              </li>
+            `,
+          )
+          .join("")}
+      </ul>`
+    : `<div class="empty-state">이 날짜의 제조 기록이 없습니다.</div>`;
+}
+
 function renderManagerSummaryAdmin(container) {
-  const today = todayDateKey();
-  const checklistStats = getChecklistStats(today);
-  const openNotes = getHandoverNotes({ openOnly: true });
-  const recentNotes = getHandoverNotes().slice(0, 5);
+  const summaryDates = recentDateKeys(7);
+  const selectedDate = getSelectedSummaryDate();
+  const previousDate = shiftDateKey(selectedDate, -1);
+  const checklistStats = getChecklistStats(selectedDate);
+  const openStat = checklistStats.sections.find((section) => section.section === "open") || checklistStats.sections[0];
+  const closeStat = checklistStats.sections.find((section) => section.section === "close") || checklistStats.sections[1];
+  const dayNotes = getHandoverNotesForDate(selectedDate);
+  const previousDayNotes = getHandoverNotesForDate(previousDate);
+  const unresolvedPreviousNotes = previousDayNotes.filter((note) => note.status !== "resolved");
+  const attendanceRecords = getAttendanceRecordsForDate(selectedDate);
+  const unconfirmedAttendanceRecords = attendanceRecords.filter((record) => !isSignedPresentRecord(record));
+  const alarmEvents = getAlarmEventsForDate(selectedDate);
+  const openAlarms = alarmEvents.filter((event) => ["triggered", "snoozed"].includes(event.status));
+  const completedAlarms = alarmEvents.filter((event) => event.status === "acknowledged");
+  const dayBatches = getPrepBatchesForDate(selectedDate, false);
   const lowSupplies = getOrderNeededSupplies();
-  const openAlarms = getOpenAlarmEventsToday();
-  const todayBatches = getTodayPrepBatches(false);
 
   container.innerHTML = `
+    <div class="admin-card summary-date-card">
+      <div class="summary-date-heading">
+        <div>
+          <h3>${formatAttendanceDate(selectedDate)}</h3>
+          <p class="muted">최근 7일의 저장된 기록을 날짜별로 확인합니다.</p>
+        </div>
+      </div>
+      <div class="summary-date-tabs">
+        ${summaryDates
+          .map(
+            (date) => `
+              <button class="summary-date-tab ${date === selectedDate ? "is-active" : ""}" type="button" data-summary-date="${date}">
+                <strong>${escapeHtml(formatSummaryDateTabLabel(date))}</strong>
+                <span>${escapeHtml(date.slice(5).replace("-", "."))}</span>
+              </button>
+            `,
+          )
+          .join("")}
+      </div>
+    </div>
+
     <div class="admin-card">
       <div class="manager-summary-grid">
-        <article class="summary-tile">
-          <span>체크 진행률</span>
-          <strong>${checklistStats.percent}%</strong>
-          <small>${checklistStats.done}/${checklistStats.total} 완료</small>
+        <article class="summary-tile ${openStat?.pending ? "is-warning" : ""}">
+          <span>오픈 체크</span>
+          <strong>${openStat?.done || 0}/${openStat?.total || 0}</strong>
+          <small>${openStat?.pending ? `미완료 ${openStat.pending}` : "완료"}</small>
         </article>
-        <article class="summary-tile ${lowSupplies.length ? "is-warning" : ""}">
-          <span>발주 필요</span>
-          <strong>${lowSupplies.length}</strong>
-          <small>${lowSupplies.length ? lowSupplies.slice(0, 2).map((supply) => supply.name).join(", ") : "없음"}</small>
+        <article class="summary-tile ${closeStat?.pending ? "is-warning" : ""}">
+          <span>마감 체크</span>
+          <strong>${closeStat?.done || 0}/${closeStat?.total || 0}</strong>
+          <small>${closeStat?.pending ? `미완료 ${closeStat.pending}` : "완료"}</small>
         </article>
-        <article class="summary-tile ${openNotes.length ? "is-warning" : ""}">
-          <span>미해결 인수인계</span>
-          <strong>${openNotes.length}</strong>
-          <small>${openNotes.length ? "확인 필요" : "없음"}</small>
+        <article class="summary-tile ${unconfirmedAttendanceRecords.length ? "is-warning" : ""}">
+          <span>근퇴 확인</span>
+          <strong>${attendanceRecords.length}</strong>
+          <small>${unconfirmedAttendanceRecords.length ? `확인 대기 ${unconfirmedAttendanceRecords.length}` : "확인 완료"}</small>
         </article>
         <article class="summary-tile ${openAlarms.length ? "is-warning" : ""}">
-          <span>미처리 알림</span>
-          <strong>${openAlarms.length}</strong>
-          <small>${openAlarms.length ? openAlarms[0].alarmTitle : "없음"}</small>
+          <span>알림 처리</span>
+          <strong>${completedAlarms.length}/${alarmEvents.length}</strong>
+          <small>${openAlarms.length ? `미처리 ${openAlarms.length}` : "미처리 없음"}</small>
+        </article>
+        <article class="summary-tile ${unresolvedPreviousNotes.length ? "is-warning" : ""}">
+          <span>전날 인수인계</span>
+          <strong>${previousDayNotes.length}</strong>
+          <small>${unresolvedPreviousNotes.length ? `미처리 ${unresolvedPreviousNotes.length}` : "처리 완료"}</small>
         </article>
         <article class="summary-tile">
-          <span>오늘 제조</span>
-          <strong>${todayBatches.length}</strong>
+          <span>제조 기록</span>
+          <strong>${dayBatches.length}</strong>
           <small>취소 제외</small>
+        </article>
+        <article class="summary-tile ${lowSupplies.length ? "is-warning" : ""}">
+          <span>발주 필요(현재)</span>
+          <strong>${lowSupplies.length}</strong>
+          <small>${lowSupplies.length ? lowSupplies.slice(0, 2).map((supply) => supply.name).join(", ") : "없음"}</small>
         </article>
       </div>
     </div>
 
     <div class="summary-columns">
-      ${checklistStats.sections.map((section) => renderChecklistSummaryCard(section, today)).join("")}
+      ${checklistStats.sections.map((section) => renderChecklistSummaryCard(section, selectedDate)).join("")}
     </div>
 
     <div class="summary-columns">
       <section class="admin-card">
-        <h3>최근 인수인계</h3>
-        ${
-          recentNotes.length
-            ? `<div class="handover-list handover-list--compact">
-                ${recentNotes
-                  .map(
-                    (note) => `
-                      <article class="handover-item ${note.status === "resolved" ? "is-resolved" : ""}">
-                        <div>
-                          <strong>${escapeHtml(note.category)}</strong>
-                          <p>${escapeHtml(note.message)}</p>
-                          <span>${dateTimeText(note.createdAt)} · ${escapeHtml(note.author)}${
-                            note.status === "resolved" ? ` · 완료 ${note.resolvedAt ? dateTimeText(note.resolvedAt) : ""}` : ""
-                          }</span>
-                        </div>
-                      </article>
-                    `,
-                  )
-                  .join("")}
-              </div>`
-            : `<div class="empty-state">최근 인수인계가 없습니다.</div>`
-        }
+        <h3>그날 특이사항 / 인수인계</h3>
+        ${renderSummaryHandoverList(dayNotes, "이 날짜에 작성된 특이사항/인수인계가 없습니다.")}
       </section>
 
       <section class="admin-card">
-        <h3>발주 필요 품목</h3>
+        <h3>전날 인수인계 처리</h3>
+        <p class="muted">${formatAttendanceDate(previousDate)}에 남긴 내용의 처리 여부입니다.</p>
+        ${renderSummaryHandoverList(previousDayNotes, "전날에서 넘어온 인수인계가 없습니다.")}
+      </section>
+    </div>
+
+    <div class="summary-columns">
+      <section class="admin-card">
+        <h3>근퇴 확인</h3>
+        ${renderSummaryAttendanceList(attendanceRecords)}
+      </section>
+
+      <section class="admin-card">
+        <h3>알림 처리</h3>
+        ${renderSummaryAlarmList(alarmEvents)}
+      </section>
+    </div>
+
+    <div class="summary-columns">
+      <section class="admin-card">
+        <h3>제조 기록</h3>
+        ${renderSummaryPrepList(dayBatches)}
+      </section>
+
+      <section class="admin-card">
+        <h3>발주 필요 품목(현재 기준)</h3>
         ${
           lowSupplies.length
             ? `<ul class="compact-list">
@@ -4159,23 +4343,14 @@ function renderManagerSummaryAdmin(container) {
         }
       </section>
     </div>
-
-    <div class="summary-columns summary-columns--single">
-      <section class="admin-card">
-        <h3>오늘 제조 기록</h3>
-        ${
-          todayBatches.length
-            ? `<ul class="compact-list">
-                ${todayBatches
-                  .slice(0, 8)
-                  .map((batch) => `<li><strong>${timeText(batch.createdAt)}</strong><span>${escapeHtml(batch.recipeName)} ${escapeHtml(batch.variantLabel)}</span></li>`)
-                  .join("")}
-              </ul>`
-            : `<div class="empty-state">오늘 제조 기록이 없습니다.</div>`
-        }
-      </section>
-    </div>
   `;
+
+  container.querySelectorAll("[data-summary-date]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.summaryDate = button.dataset.summaryDate;
+      renderAdminScreen();
+    });
+  });
 }
 
 function renderServiceManualsAdmin(container) {

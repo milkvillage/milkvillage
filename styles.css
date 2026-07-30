@@ -2428,8 +2428,59 @@ th {
 
 .manager-summary-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 12px;
+}
+
+.summary-date-card {
+  display: grid;
+  gap: 14px;
+}
+
+.summary-date-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.summary-date-heading h3 {
+  margin: 0 0 4px;
+}
+
+.summary-date-tabs {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(86px, 1fr));
+  gap: 8px;
+}
+
+.summary-date-tab {
+  min-height: 58px;
+  display: grid;
+  place-items: center;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.summary-date-tab strong {
+  font-size: 16px;
+}
+
+.summary-date-tab span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.summary-date-tab.is-active {
+  border-color: var(--teal);
+  background: var(--teal-soft);
+  color: var(--teal-dark);
 }
 
 .summary-tile {
@@ -2983,6 +3034,10 @@ th {
   .summary-columns .admin-card + .admin-card {
     border-left: 0;
     border-top: 1px solid var(--line);
+  }
+
+  .summary-date-tabs {
+    grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
   }
 
   .analysis-toolbar {
