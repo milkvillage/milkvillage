@@ -365,7 +365,7 @@ function shiftDateKey(dateKey, offsetDays) {
 
 function recentDateKeys(limit = 7) {
   const today = todayDateKey();
-  return Array.from({ length: limit }, (_, index) => shiftDateKey(today, -index));
+  return Array.from({ length: limit }, (_, index) => shiftDateKey(today, index - limit + 1));
 }
 
 function formatSummaryDateTabLabel(dateKey) {
@@ -4099,7 +4099,7 @@ function renderChecklistSummaryCard(sectionStat, date) {
 
 function getSelectedSummaryDate() {
   const dates = recentDateKeys(7);
-  if (!dates.includes(state.summaryDate)) state.summaryDate = dates[0];
+  if (!dates.includes(state.summaryDate)) state.summaryDate = todayDateKey();
   return state.summaryDate;
 }
 
