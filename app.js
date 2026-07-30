@@ -1285,8 +1285,11 @@ async function saveRemoteNow() {
         remoteRow = await fetchRemoteJson(`/state/${encodeURIComponent(REMOTE_STATE_ID)}`);
       } catch (error) {
         console.error(error);
-        setRemoteStatus(formatRemoteSaveError(error), "error");
-        return false;
+        if (remoteIsNewerThanLocal) {
+          setRemoteStatus(formatRemoteSaveError(error), "error");
+          return false;
+        }
+        setRemoteStatus("Cloudflare 복구 저장 중", "saving");
       }
       if (remoteRow?.data && remoteRow.updated_at) {
         if (remoteIsNewerThanLastSync) mergeRemoteAlarmEvents(dataToSave, normalizeDb(remoteRow.data));
