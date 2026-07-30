@@ -2815,6 +2815,42 @@ th {
   justify-content: center;
 }
 
+.alarm-queue-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 14px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: #fff4dc;
+  color: #8a5b10;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.alarm-workflow-status {
+  margin: 0 auto 16px;
+  padding: 14px;
+  border-radius: 8px;
+  background: var(--teal-soft);
+  color: var(--teal-dark);
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 1.45;
+}
+
+.alarm-staff-field {
+  max-width: 360px;
+  margin: 0 auto 6px;
+  text-align: left;
+}
+
+.alarm-staff-field select {
+  min-height: 58px;
+  font-size: 22px;
+  font-weight: 900;
+}
+
 .measured-prep-preview {
   margin: 12px 0 4px;
   padding: 14px;

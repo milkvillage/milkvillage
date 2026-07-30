@@ -138,10 +138,18 @@
         </div>
         <h2 id="alarmTitle">소모품 확인</h2>
         <p id="alarmMessage">소모품 확인 및 채우기를 할 시간입니다.</p>
+        <div class="alarm-queue-status" id="alarmQueueStatus" hidden></div>
+        <div class="alarm-workflow-status" id="alarmWorkflowStatus">소리를 끈 뒤 업무를 처리하고 완료해주세요.</div>
+        <label class="field alarm-staff-field">
+          <span>처리 직원</span>
+          <select id="alarmStaffSelect">
+            <option value="">이름 선택</option>
+          </select>
+        </label>
         <div class="sound-help" id="soundHelp" hidden></div>
         <div class="modal-actions">
-          <button class="button button--primary" id="alarmAck" type="button">확인 완료</button>
-          <button class="button button--ghost" id="alarmSnooze" type="button">10분 뒤 다시 알림</button>
+          <button class="button button--ghost" id="alarmSoundOff" type="button">소리 끄기</button>
+          <button class="button button--primary" id="alarmAck" type="button">업무 완료</button>
         </div>
       </section>
     </div>

@@ -260,6 +260,10 @@ const els = {
   alarmModal: document.querySelector("#alarmModal"),
   alarmTitle: document.querySelector("#alarmTitle"),
   alarmMessage: document.querySelector("#alarmMessage"),
+  alarmQueueStatus: document.querySelector("#alarmQueueStatus"),
+  alarmWorkflowStatus: document.querySelector("#alarmWorkflowStatus"),
+  alarmStaffSelect: document.querySelector("#alarmStaffSelect"),
+  alarmSoundOff: document.querySelector("#alarmSoundOff"),
   alarmAck: document.querySelector("#alarmAck"),
   alarmSnooze: document.querySelector("#alarmSnooze"),
   soundHelp: document.querySelector("#soundHelp"),
@@ -6222,7 +6226,7 @@ function renderAlarmLogsAdmin(container) {
               <th>알림</th>
               <th>울린 시간</th>
               <th>상태</th>
-              <th>확인/스누즈</th>
+              <th>처리 내용</th>
             </tr>
           </thead>
           <tbody>
@@ -6234,8 +6238,8 @@ function renderAlarmLogsAdmin(container) {
                         <tr>
                           <td>${escapeHtml(log.alarmTitle)}</td>
                           <td>${dateTimeText(log.triggeredAt)}</td>
-                          <td>${alarmStatusLabel(log.status)}</td>
-                          <td>${log.acknowledgedAt ? dateTimeText(log.acknowledgedAt) : log.snoozedUntil ? dateTimeText(log.snoozedUntil) : "-"}</td>
+                          <td>${alarmProcessingStatusLabel(log)}</td>
+                          <td>${escapeHtml(alarmProcessingDetailText(log))}</td>
                         </tr>
                       `,
                     )
@@ -6576,6 +6580,7 @@ function triggerAlarm(alarm, source = "schedule", scheduledAt = "") {
 }
 
 function updateAlarmEventFromAlarm(eventLog, alarm, { source = "schedule", triggeredAt = nowIso() } = {}) {
+  const previous = { ...eventLog };
   Object.assign(eventLog, {
     alarmId: alarm.id,
     alarmTitle: alarm.title,
@@ -6588,20 +6593,65 @@ function updateAlarmEventFromAlarm(eventLog, alarm, { source = "schedule", trigg
     closeTime: normalizeAlarmWindowTime(alarm.closeTime, "24:00"),
     snoozeMinutes: Number(alarm.snoozeMinutes || 10),
     triggeredAt,
-    acknowledgedAt: "",
-    acknowledgedBy: "",
-    snoozedUntil: "",
-    status: "triggered",
+    soundStoppedAt: previous.soundStoppedAt || "",
+    acknowledgedAt: previous.acknowledgedAt || "",
+    acknowledgedBy: previous.acknowledgedBy || "",
+    completedAt: previous.completedAt || "",
+    completedBy: previous.completedBy || "",
+    completedByStaffId: previous.completedByStaffId || "",
+    snoozedUntil: previous.snoozedUntil || "",
+    status: previous.status || "triggered",
     source,
-    createdAt: triggeredAt,
-    updatedAt: triggeredAt,
+    createdAt: previous.createdAt || triggeredAt,
+    updatedAt: previous.updatedAt && isIsoAfter(previous.updatedAt, triggeredAt) ? previous.updatedAt : triggeredAt,
   });
   return eventLog;
 }
 
+function getPendingAlarmEventsToday() {
+  const today = todayDateKey();
+  return db.alarmEventLogs
+    .filter((log) => log.status === "triggered" && dateKeyFromIso(log.triggeredAt) === today)
+    .sort((a, b) => new Date(a.triggeredAt) - new Date(b.triggeredAt));
+}
+
+function getQueuedAlarmCount(activeEventId = state.activeAlarmEventId) {
+  return getPendingAlarmEventsToday().filter((log) => log.id !== activeEventId).length;
+}
+
 function showAlarmModal(alarm, { playSound = true, immediate = true } = {}) {
+  const eventLog = db.alarmEventLogs.find((log) => log.id === state.activeAlarmEventId);
+  const staffMembers = getActiveStaffMembers();
+  const queuedCount = getQueuedAlarmCount(eventLog?.id);
   els.alarmTitle.textContent = alarm.title;
   els.alarmMessage.textContent = alarm.message;
+  if (els.alarmQueueStatus) {
+    els.alarmQueueStatus.hidden = queuedCount <= 0;
+    els.alarmQueueStatus.textContent = queuedCount > 0 ? `대기 중인 다음 알림 ${queuedCount}개` : "";
+  }
+  if (els.alarmWorkflowStatus) {
+    els.alarmWorkflowStatus.textContent = !staffMembers.length
+      ? "관리자 화면에서 근무자 이름을 먼저 등록해야 업무 완료 처리가 가능합니다."
+      : eventLog?.soundStoppedAt
+        ? "소리는 꺼졌습니다. 업무를 처리한 뒤 이름을 선택하고 완료해주세요."
+        : "알림음이 울리는 중입니다. 먼저 소리를 끄고 업무를 처리해주세요.";
+  }
+  if (els.alarmStaffSelect) {
+    const selectedStaffId = eventLog?.completedByStaffId || "";
+    els.alarmStaffSelect.innerHTML = `
+      <option value="">이름 선택</option>
+      ${staffMembers.map((staff) => `<option value="${escapeAttr(staff.id)}" ${staff.id === selectedStaffId ? "selected" : ""}>${escapeHtml(staff.name)}</option>`).join("")}
+    `;
+    els.alarmStaffSelect.disabled = !staffMembers.length;
+  }
+  if (els.alarmSoundOff) {
+    els.alarmSoundOff.disabled = Boolean(eventLog?.soundStoppedAt);
+    els.alarmSoundOff.textContent = eventLog?.soundStoppedAt ? "소리 꺼짐" : "소리 끄기";
+  }
+  if (els.alarmAck) {
+    els.alarmAck.disabled = !staffMembers.length || !eventLog?.soundStoppedAt;
+    els.alarmAck.textContent = "업무 완료";
+  }
   if (els.soundHelp) els.soundHelp.hidden = true;
   els.alarmModal.hidden = false;
   if (playSound) startAlarmSound(alarm, { immediate });
@@ -6613,14 +6663,11 @@ function closeAlarmModal() {
 }
 
 function getOpenAlarmEvent() {
-  const today = todayDateKey();
   const activeEvent = db.alarmEventLogs.find(
-    (log) => log.id === state.activeAlarmEventId && log.status === "triggered" && dateKeyFromIso(log.triggeredAt) === today,
+    (log) => log.id === state.activeAlarmEventId && log.status === "triggered" && dateKeyFromIso(log.triggeredAt) === todayDateKey(),
   );
   if (activeEvent) return activeEvent;
-  return db.alarmEventLogs
-    .filter((log) => log.status === "triggered" && dateKeyFromIso(log.triggeredAt) === today)
-    .sort((a, b) => new Date(a.triggeredAt) - new Date(b.triggeredAt))[0];
+  return getPendingAlarmEventsToday()[0];
 }
 
 function findAlarmEventForMinute(alarmId, date) {
@@ -6733,7 +6780,7 @@ function restartActiveAlarmIfMatching(alarm) {
   saveDb();
   const displayAlarm = getAlarmDisplayFromEvent(eventLog);
   showAlarmModal(displayAlarm, { playSound: false });
-  startAlarmSound(displayAlarm, { forceRestart: true, immediate: true });
+  if (!eventLog.soundStoppedAt) startAlarmSound(displayAlarm, { forceRestart: true, immediate: true });
 }
 
 function showNextOpenAlarm(source = "local") {
@@ -6750,22 +6797,53 @@ function showNextOpenAlarm(source = "local") {
   state.activeAlarmEventId = openEvent.id;
   const alarm = getAlarmDisplayFromEvent(openEvent);
   showAlarmModal(alarm, { playSound: false });
-  startAlarmSound(alarm, { forceRestart: isNewEvent, immediate: isNewEvent });
+  if (openEvent.soundStoppedAt) {
+    stopAlarmSound();
+  } else {
+    startAlarmSound(alarm, { forceRestart: isNewEvent, immediate: isNewEvent });
+  }
 }
 
 function syncAlarmModalFromRemote(source = "realtime") {
   showNextOpenAlarm(source);
 }
 
+function silenceActiveAlarm() {
+  const eventLog = db.alarmEventLogs.find((log) => log.id === state.activeAlarmEventId && log.status === "triggered");
+  if (!eventLog) return;
+  const stoppedAt = nowIso();
+  eventLog.soundStoppedAt = eventLog.soundStoppedAt || stoppedAt;
+  eventLog.updatedAt = stoppedAt;
+  stopAlarmSound();
+  saveDb({ immediateRemote: true });
+  showAlarmModal(getAlarmDisplayFromEvent(eventLog), { playSound: false });
+  if (state.screen === "admin" && state.adminMenu === "alarmLogs") renderAdminScreen();
+}
+
 function acknowledgeAlarm() {
   const eventLog = db.alarmEventLogs.find((log) => log.id === state.activeAlarmEventId);
+  if (!eventLog?.soundStoppedAt) {
+    alert("먼저 소리 끄기를 누른 뒤 업무를 처리하고 완료해주세요.");
+    return;
+  }
+  const staffId = els.alarmStaffSelect?.value || "";
+  const staff = staffId ? getStaffMember(staffId) : null;
+  if (!staff) {
+    alert("업무를 처리한 직원 이름을 선택해주세요.");
+    els.alarmStaffSelect?.focus();
+    return;
+  }
   if (eventLog) {
     const acknowledgedAt = nowIso();
+    eventLog.soundStoppedAt = eventLog.soundStoppedAt || acknowledgedAt;
     eventLog.status = "acknowledged";
     eventLog.acknowledgedAt = acknowledgedAt;
-    eventLog.acknowledgedBy = "직원";
+    eventLog.acknowledgedBy = staff.name;
+    eventLog.completedAt = acknowledgedAt;
+    eventLog.completedBy = staff.name;
+    eventLog.completedByStaffId = staff.id;
     eventLog.updatedAt = acknowledgedAt;
-    saveDb();
+    saveDb({ immediateRemote: true });
   }
   closeAlarmModal();
   state.activeAlarmEventId = null;
@@ -7444,10 +7522,35 @@ function dayLabel(day) {
 function alarmStatusLabel(status) {
   return {
     triggered: "울림",
-    acknowledged: "확인 완료",
+    acknowledged: "업무 완료",
     snoozed: "스누즈",
     missed: "재알림 처리",
   }[status] || status;
+}
+
+function formatAlarmElapsedTime(startIso, endIso) {
+  const start = new Date(startIso).getTime();
+  const end = new Date(endIso).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return "";
+  return formatDurationText(Math.max(0, Math.round((end - start) / 60000)));
+}
+
+function alarmProcessingStatusLabel(log) {
+  if (log.status === "acknowledged") return "업무 완료";
+  if (log.status === "triggered" && log.soundStoppedAt) return "업무 처리 대기";
+  if (log.status === "triggered") return "소리 울림";
+  return alarmStatusLabel(log.status);
+}
+
+function alarmProcessingDetailText(log) {
+  if (log.status === "acknowledged") {
+    const completedAt = log.completedAt || log.acknowledgedAt;
+    const elapsedText = formatAlarmElapsedTime(log.triggeredAt, completedAt);
+    return `${log.completedBy || log.acknowledgedBy || "-"} · ${dateTimeText(completedAt)}${elapsedText ? ` · ${elapsedText}` : ""}`;
+  }
+  if (log.soundStoppedAt) return `소리 끔 ${dateTimeText(log.soundStoppedAt)}`;
+  if (log.snoozedUntil) return `재알림 ${dateTimeText(log.snoozedUntil)}`;
+  return "-";
 }
 
 function transactionTypeLabel(type) {
@@ -7498,8 +7601,9 @@ els.cancelConfirm.addEventListener("click", () => {
 els.measuredPrepClose?.addEventListener("click", closeMeasuredPrepModal);
 els.measuredPrepInput?.addEventListener("input", updateMeasuredPrepPreview);
 els.measuredPrepConfirm?.addEventListener("click", confirmMeasuredPrep);
-els.alarmAck.addEventListener("click", acknowledgeAlarm);
-els.alarmSnooze.addEventListener("click", snoozeAlarm);
+els.alarmSoundOff?.addEventListener("click", silenceActiveAlarm);
+els.alarmAck?.addEventListener("click", acknowledgeAlarm);
+els.alarmSnooze?.addEventListener("click", snoozeAlarm);
 els.attendanceConfirmClose?.addEventListener("click", closeAttendanceConfirmModal);
 els.attendanceConfirmFinal?.addEventListener("click", finalizeAttendanceRecord);
 els.updateCheckButton?.addEventListener("click", handleUpdateButtonClick);
