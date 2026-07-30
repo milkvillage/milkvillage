@@ -64,7 +64,7 @@ const LOG_RETENTION_DAYS = {
   alarmEventLogs: 30,
   inventoryTransactions: 90,
   prepBatches: 90,
-  operationRecords: 180,
+  operationRecords: 60,
 };
 const ADMIN_UNLOCK_DURATION_MS = 10 * 60 * 1000;
 const VERSION_CHECK_INTERVAL_MS = 30 * 60 * 1000;
