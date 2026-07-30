@@ -177,6 +177,7 @@ let remotePollTimer = null;
 let lastRemoteUpdatedAt = "";
 let localRevisionAt = "";
 let hasPendingRemoteSave = false;
+let remoteRecoveryAttempted = false;
 let lastRemoteResumeSyncAt = 0;
 let remoteInitialSyncDone = !remoteClient;
 let remoteResumeSyncInFlight = false;
@@ -277,6 +278,7 @@ const els = {
   attendanceConfirmFinal: document.querySelector("#attendanceConfirmFinal"),
 };
 
+const hadStoredLocalDb = Boolean(localStorage.getItem(STORAGE_KEY));
 let db = loadDb();
 localRevisionAt = db.meta?.updatedAt || "";
 const initializedMeasuredWhippingPreset = ensureMeasuredWhippingPreset();
@@ -337,6 +339,13 @@ function isIsoAfter(leftIso, rightIso) {
   const left = new Date(leftIso).getTime();
   const right = new Date(rightIso).getTime();
   return Number.isFinite(left) && Number.isFinite(right) && left > right;
+}
+
+function isIsoSameOrAfter(leftIso, rightIso) {
+  if (!leftIso || !rightIso) return false;
+  const left = new Date(leftIso).getTime();
+  const right = new Date(rightIso).getTime();
+  return Number.isFinite(left) && Number.isFinite(right) && left >= right;
 }
 
 function todayDateKey(date = new Date()) {
@@ -1099,10 +1108,38 @@ async function initRemoteSync() {
     applyingRemoteState = false;
     remoteInitialSyncDone = true;
     console.error(error);
+    const recovered = await recoverRemoteStateFromLocal();
+    if (recovered) {
+      subscribeRemoteChanges();
+      startRemotePolling();
+      checkAlarms();
+      return;
+    }
     const currentStatus = els.remoteStatus?.textContent || "";
     setRemoteStatus(currentStatus.includes("실패") ? currentStatus : "Cloudflare 저장 확인 필요", "error");
     checkAlarms();
   }
+}
+
+async function recoverRemoteStateFromLocal() {
+  if (!remoteClient || remoteRecoveryAttempted || !hadStoredLocalDb) return false;
+  remoteRecoveryAttempted = true;
+
+  let remoteMeta = null;
+  try {
+    remoteMeta = await fetchRemoteMeta();
+  } catch (error) {
+    console.error(error);
+  }
+
+  const localUpdatedAt = db.meta?.updatedAt || localRevisionAt || "";
+  if (remoteMeta?.updated_at && !isIsoSameOrAfter(localUpdatedAt, remoteMeta.updated_at)) return false;
+
+  setRemoteStatus("Cloudflare 복구 저장 중", "saving");
+  hasPendingRemoteSave = true;
+  const didRecover = await saveRemoteNow();
+  if (didRecover) setRemoteStatus("Cloudflare 복구 저장 완료", "online");
+  return didRecover;
 }
 
 async function fetchRemoteState({ force = false, source = "poll" } = {}) {
