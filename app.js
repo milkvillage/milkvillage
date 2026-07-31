@@ -6,6 +6,7 @@ const REMOTE_POLL_INTERVAL_MS = 30 * 60 * 1000;
 const REMOTE_POLL_HIDDEN_INTERVAL_MS = 60 * 60 * 1000;
 const REMOTE_SAVE_DEBOUNCE_MS = 30 * 1000;
 const REMOTE_RESUME_SYNC_COOLDOWN_MS = 5 * 60 * 1000;
+const ACTIVE_ALARM_REMOTE_SYNC_INTERVAL_MS = 5 * 1000;
 const CHECKLIST_TEMPLATE_VERSION = "20260627-open-checklist-v1";
 const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const alarmDayOrder = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
@@ -174,6 +175,7 @@ let remoteSaveTimer = null;
 let applyingRemoteState = false;
 let remoteChannel = null;
 let remotePollTimer = null;
+let activeAlarmRemoteSyncTimer = null;
 let lastRemoteUpdatedAt = "";
 let localRevisionAt = "";
 let hasPendingRemoteSave = false;
@@ -182,6 +184,7 @@ let lastRemoteResumeSyncAt = 0;
 let remoteInitialSyncDone = !remoteClient;
 let remoteResumeSyncInFlight = false;
 let remoteResumeSyncPromise = null;
+let activeAlarmRemoteSyncInFlight = false;
 let pendingSpeech = null;
 let alarmSpeechLoopTimer = null;
 let alarmSpeechRetryTimer = null;
@@ -1216,6 +1219,7 @@ function applyRemoteState(row, { force = false, source = "realtime" } = {}) {
   const nextUpdatedAt = row.updated_at || "";
   if (!force && nextUpdatedAt && lastRemoteUpdatedAt && new Date(nextUpdatedAt) <= new Date(lastRemoteUpdatedAt)) return;
   if (!force && hasPendingRemoteSave) {
+    if (source === "alarm" && mergeRemoteAlarmEventsIntoPendingState(row)) return;
     setRemoteStatus("로컬 변경 저장 대기", "saving");
     queueRemoteSave();
     return;
@@ -1241,6 +1245,26 @@ function applyRemoteState(row, { force = false, source = "realtime" } = {}) {
   render();
   syncAlarmModalFromRemote(source);
   if (prunedExpiredLogs || initializedMeasuredPreset || initializedDefaultStaff) queueRemoteSave();
+}
+
+function mergeRemoteAlarmEventsIntoPendingState(row) {
+  if (!row?.data) return false;
+  const nextUpdatedAt = row.updated_at || "";
+  const remoteData = normalizeDb(row.data);
+  const changed = mergeRemoteAlarmEvents(db, remoteData);
+  lastRemoteUpdatedAt = nextUpdatedAt || lastRemoteUpdatedAt;
+  if (!changed) return true;
+
+  if (nextUpdatedAt && !isIsoAfter(db.meta?.updatedAt, nextUpdatedAt)) {
+    db.meta = { ...(db.meta || {}), updatedAt: nextUpdatedAt };
+    localRevisionAt = nextUpdatedAt;
+  }
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+  setRemoteStatus("알림 상태 동기화됨", "online");
+  syncAlarmModalFromRemote("alarm");
+  queueRemoteSave();
+  if (state.screen === "admin" && state.adminMenu === "alarmLogs") renderAdminScreen();
+  return true;
 }
 
 function syncSelectedIds() {
@@ -1278,6 +1302,44 @@ function startRemotePolling() {
     });
   };
   remotePollTimer = window.setTimeout(poll, REMOTE_POLL_INTERVAL_MS);
+}
+
+function startActiveAlarmRemoteSync() {
+  if (!remoteClient || activeAlarmRemoteSyncTimer) return;
+  const poll = () => {
+    if (!state.activeAlarmEventId || els.alarmModal?.hidden) {
+      stopActiveAlarmRemoteSync();
+      return;
+    }
+
+    if (activeAlarmRemoteSyncInFlight) {
+      activeAlarmRemoteSyncTimer = window.setTimeout(poll, ACTIVE_ALARM_REMOTE_SYNC_INTERVAL_MS);
+      return;
+    }
+
+    activeAlarmRemoteSyncInFlight = true;
+    fetchRemoteStateIfChanged({ source: "alarm" })
+      .catch((error) => {
+        console.warn(error);
+      })
+      .finally(() => {
+        activeAlarmRemoteSyncInFlight = false;
+        if (!state.activeAlarmEventId || els.alarmModal?.hidden) {
+          activeAlarmRemoteSyncTimer = null;
+          return;
+        }
+        activeAlarmRemoteSyncTimer = window.setTimeout(poll, ACTIVE_ALARM_REMOTE_SYNC_INTERVAL_MS);
+      });
+  };
+  activeAlarmRemoteSyncTimer = window.setTimeout(poll, ACTIVE_ALARM_REMOTE_SYNC_INTERVAL_MS);
+}
+
+function stopActiveAlarmRemoteSync() {
+  if (activeAlarmRemoteSyncTimer) {
+    window.clearTimeout(activeAlarmRemoteSyncTimer);
+    activeAlarmRemoteSyncTimer = null;
+  }
+  activeAlarmRemoteSyncInFlight = false;
 }
 
 function queueRemoteSave() {
@@ -6874,6 +6936,7 @@ function showAlarmModal(alarm, { playSound = true, immediate = true } = {}) {
 
 function closeAlarmModal() {
   stopAlarmSound();
+  stopActiveAlarmRemoteSync();
   els.alarmModal.hidden = true;
 }
 
@@ -7012,6 +7075,7 @@ function showNextOpenAlarm(source = "local") {
   state.activeAlarmEventId = openEvent.id;
   const alarm = getAlarmDisplayFromEvent(openEvent);
   showAlarmModal(alarm, { playSound: false });
+  startActiveAlarmRemoteSync();
   if (openEvent.soundStoppedAt) {
     stopAlarmSound();
   } else {
