@@ -5,6 +5,8 @@ const ENABLE_REALTIME_SYNC = false;
 const REMOTE_POLL_INTERVAL_MS = 30 * 60 * 1000;
 const REMOTE_POLL_HIDDEN_INTERVAL_MS = 60 * 60 * 1000;
 const REMOTE_SAVE_DEBOUNCE_MS = 30 * 1000;
+const REMOTE_DIRECT_SAVE_MAX_BYTES = 900 * 1024;
+const REMOTE_UPLOAD_CHUNK_SIZE = 128 * 1024;
 const REMOTE_RESUME_SYNC_COOLDOWN_MS = 5 * 60 * 1000;
 const ACTIVE_ALARM_REMOTE_SYNC_INTERVAL_MS = 5 * 1000;
 const CHECKLIST_TEMPLATE_VERSION = "20260627-open-checklist-v1";
@@ -323,14 +325,25 @@ async function fetchRemoteJson(path, options = {}) {
     },
   });
   const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
+  }
   if (!response.ok) {
-    const error = new Error(data?.message || data?.error || `remote request failed: ${response.status}`);
+    const errorMessage = data?.message || data?.error || text || `remote request failed: ${response.status}`;
+    const error = new Error(errorMessage);
     error.status = response.status;
     error.data = data;
     throw error;
   }
   return data;
+}
+
+function getUtf8ByteLength(value) {
+  if (window.TextEncoder) return new TextEncoder().encode(value).length;
+  return encodeURIComponent(value).replace(/%[0-9A-F]{2}/g, "x").length;
 }
 
 function nowIso() {
@@ -1401,14 +1414,7 @@ async function saveRemoteNow() {
   }
 
   try {
-    await fetchRemoteJson(`/state/${encodeURIComponent(REMOTE_STATE_ID)}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        data: dataToSave,
-        updated_at: localUpdatedAt,
-      }),
-    });
+    await saveRemoteStateData(dataToSave, localUpdatedAt);
   } catch (error) {
     console.error(error);
     setRemoteStatus(formatRemoteSaveError(error), "error");
@@ -1427,6 +1433,73 @@ async function saveRemoteNow() {
   setRemoteStatus("Cloudflare 연결됨", "online");
   syncAlarmModalFromRemote("local");
   return true;
+}
+
+async function saveRemoteStateData(dataToSave, updatedAt) {
+  const body = JSON.stringify({
+    data: dataToSave,
+    updated_at: updatedAt,
+  });
+  if (getUtf8ByteLength(body) <= REMOTE_DIRECT_SAVE_MAX_BYTES) {
+    return fetchRemoteJson(`/state/${encodeURIComponent(REMOTE_STATE_ID)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body,
+    });
+  }
+  return uploadRemoteStateInChunks(dataToSave, updatedAt);
+}
+
+async function uploadRemoteStateInChunks(dataToSave, updatedAt) {
+  const serialized = JSON.stringify(dataToSave);
+  const chunks = splitTextChunks(serialized, REMOTE_UPLOAD_CHUNK_SIZE);
+  const uploadId = makeRemoteUploadId();
+  const params = new URLSearchParams({
+    chunks: String(chunks.length),
+    bytes: String(getUtf8ByteLength(serialized)),
+    updated_at: updatedAt,
+  });
+  const encodedStateId = encodeURIComponent(REMOTE_STATE_ID);
+  const encodedUploadId = encodeURIComponent(uploadId);
+
+  try {
+    for (const [index, chunk] of chunks.entries()) {
+      await fetchRemoteJson(`/state/${encodedStateId}/chunks/${encodedUploadId}/${index}?${params.toString()}`, {
+        method: "PUT",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: chunk,
+      });
+    }
+    return fetchRemoteJson(`/state/${encodedStateId}/chunks/${encodedUploadId}/commit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chunks: chunks.length,
+        bytes: getUtf8ByteLength(serialized),
+        updated_at: updatedAt,
+      }),
+    });
+  } catch (error) {
+    try {
+      await fetchRemoteJson(`/state/${encodedStateId}/chunks/${encodedUploadId}`, { method: "DELETE" });
+    } catch (cleanupError) {
+      console.warn(cleanupError);
+    }
+    throw error;
+  }
+}
+
+function splitTextChunks(text, size) {
+  const chunks = [];
+  for (let index = 0; index < text.length; index += size) {
+    chunks.push(text.slice(index, index + size));
+  }
+  return chunks;
+}
+
+function makeRemoteUploadId() {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function formatRemoteSaveError(error) {

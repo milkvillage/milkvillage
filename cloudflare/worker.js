@@ -1,6 +1,6 @@
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, PUT, DELETE, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, PUT, POST, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, X-Milk-Village-Admin-Key",
   "Access-Control-Max-Age": "86400",
 };
@@ -19,6 +19,22 @@ export default {
 
       if (path === "/health" && request.method === "GET") {
         return json({ ok: true, service: "milk-village-api" });
+      }
+
+      const stateChunkMatch = path.match(/^\/state\/([^/]+)\/chunks\/([^/]+)(?:\/([^/]+))?$/);
+      if (stateChunkMatch) {
+        const stateId = decodeURIComponent(stateChunkMatch[1]);
+        const uploadId = decodeURIComponent(stateChunkMatch[2]);
+        const chunkPart = stateChunkMatch[3] ? decodeURIComponent(stateChunkMatch[3]) : "";
+        if (request.method === "PUT" && /^\d+$/.test(chunkPart)) {
+          return handlePutStateChunk(request, env, stateId, uploadId, Number(chunkPart));
+        }
+        if (request.method === "POST" && chunkPart === "commit") {
+          return handleCommitStateChunks(request, env, stateId, uploadId);
+        }
+        if (request.method === "DELETE" && !chunkPart) {
+          return handleDeleteStateChunkUpload(env, stateId, uploadId);
+        }
       }
 
       const stateMatch = path.match(/^\/state\/([^/]+)(?:\/(meta))?$/);
@@ -87,6 +103,88 @@ async function handlePutState(request, env, stateId) {
   return json({ id: stateId, updated_at: updatedAt });
 }
 
+async function handlePutStateChunk(request, env, stateId, uploadId, chunkIndex) {
+  if (!Number.isInteger(chunkIndex) || chunkIndex < 0) {
+    return json({ error: "invalid_chunk_index" }, { status: 400 });
+  }
+
+  const upload = parseChunkUploadParams(new URL(request.url));
+  if (!upload) return json({ error: "invalid_chunk_upload" }, { status: 400 });
+  if (chunkIndex >= upload.chunks) return json({ error: "chunk_index_out_of_range" }, { status: 400 });
+
+  const chunkStateId = makeUploadChunkStateId(stateId, uploadId);
+  const chunkStorageData = JSON.stringify({
+    __type: CHUNK_STORAGE_MARKER,
+    parent: stateId,
+    uploadId,
+    chunks: upload.chunks,
+    bytes: upload.bytes,
+    updated_at: upload.updatedAt,
+  });
+  const chunkText = await request.text();
+
+  await upsertStateRow(env, chunkStateId, chunkStorageData, upload.updatedAt);
+  await env.DB.prepare(
+    `insert into milk_village_state_chunks (state_id, chunk_index, data_chunk)
+     values (?, ?, ?)
+     on conflict(state_id, chunk_index) do update set data_chunk = excluded.data_chunk`,
+  )
+    .bind(chunkStateId, chunkIndex, chunkText)
+    .run();
+
+  return json({ ok: true, id: stateId, uploadId, chunkIndex });
+}
+
+async function handleCommitStateChunks(request, env, stateId, uploadId) {
+  const url = new URL(request.url);
+  let body = null;
+  try {
+    body = await request.json();
+  } catch {
+    body = {};
+  }
+
+  const upload = parseChunkUploadParams(url, body);
+  if (!upload) return json({ error: "invalid_chunk_upload" }, { status: 400 });
+
+  const chunkStateId = makeUploadChunkStateId(stateId, uploadId);
+  const chunkRows = await env.DB.prepare(
+    `select count(*) as chunk_count
+     from milk_village_state_chunks
+     where state_id = ?`,
+  )
+    .bind(chunkStateId)
+    .first();
+  if (Number(chunkRows?.chunk_count || 0) !== upload.chunks) {
+    return json({ error: "incomplete_chunk_upload", expected: upload.chunks, received: Number(chunkRows?.chunk_count || 0) }, { status: 409 });
+  }
+
+  const previousRow = await env.DB.prepare("select data from milk_village_state where id = ?").bind(stateId).first();
+  const previousData = parseStateData(previousRow?.data);
+  const previousChunkStateIds = collectPreviousChunkStateIds(stateId, previousData).filter((id) => id !== chunkStateId);
+
+  const stateData = JSON.stringify({
+    __type: CHUNKED_STATE_POINTER_MARKER,
+    chunkStateId,
+    chunks: upload.chunks,
+    bytes: upload.bytes,
+  });
+  await upsertStateRow(env, stateId, stateData, upload.updatedAt);
+
+  try {
+    await cleanupPreviousChunkStateIds(env, stateId, previousChunkStateIds);
+  } catch (error) {
+    console.warn("state chunk cleanup failed", error);
+  }
+
+  return json({ id: stateId, updated_at: upload.updatedAt, chunks: upload.chunks });
+}
+
+async function handleDeleteStateChunkUpload(env, stateId, uploadId) {
+  await cleanupChunkStorage(env, makeUploadChunkStateId(stateId, uploadId));
+  return json({ ok: true, id: stateId, uploadId });
+}
+
 async function readStateData(env, row) {
   const parsed = parseStateData(row.data);
   if (!isChunkedStateReference(parsed)) return parsed;
@@ -128,39 +226,41 @@ async function writeChunkedState(env, stateId, chunks, byteLength, updatedAt) {
     bytes: byteLength,
     updated_at: updatedAt,
   });
-
-  await upsertStateRow(env, chunkStateId, chunkStorageData, updatedAt);
-  try {
-    for (const [index, chunk] of chunks.entries()) {
-      await env.DB.prepare(
-        `insert into milk_village_state_chunks (state_id, chunk_index, data_chunk)
-         values (?, ?, ?)`,
-      )
-        .bind(chunkStateId, index, chunk)
-        .run();
-    }
-  } catch (error) {
-    await cleanupChunkStorage(env, chunkStateId);
-    throw error;
-  }
-
   const stateData = JSON.stringify({
     __type: CHUNKED_STATE_POINTER_MARKER,
     chunkStateId,
     chunks: chunks.length,
     bytes: byteLength,
   });
-  await upsertStateRow(env, stateId, stateData, updatedAt);
+
+  try {
+    const statements = [
+      prepareUpsertStateRow(env, chunkStateId, chunkStorageData, updatedAt),
+      ...chunks.map((chunk, index) =>
+        env.DB.prepare(
+          `insert into milk_village_state_chunks (state_id, chunk_index, data_chunk)
+           values (?, ?, ?)`,
+        ).bind(chunkStateId, index, chunk),
+      ),
+      prepareUpsertStateRow(env, stateId, stateData, updatedAt),
+    ];
+    await env.DB.batch(statements);
+  } catch (error) {
+    await cleanupChunkStorage(env, chunkStateId);
+    throw error;
+  }
 }
 
-async function upsertStateRow(env, stateId, stateData, updatedAt) {
-  await env.DB.prepare(
+function prepareUpsertStateRow(env, stateId, stateData, updatedAt) {
+  return env.DB.prepare(
     `insert into milk_village_state (id, data, updated_at)
      values (?, ?, ?)
      on conflict(id) do update set data = excluded.data, updated_at = excluded.updated_at`,
-  )
-    .bind(stateId, stateData, updatedAt)
-    .run();
+  ).bind(stateId, stateData, updatedAt);
+}
+
+async function upsertStateRow(env, stateId, stateData, updatedAt) {
+  await prepareUpsertStateRow(env, stateId, stateData, updatedAt).run();
 }
 
 function makeChunkStateId(stateId) {
@@ -168,6 +268,23 @@ function makeChunkStateId(stateId) {
     ? globalThis.crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   return `${stateId}__chunks__${Date.now()}__${randomId}`;
+}
+
+function makeUploadChunkStateId(stateId, uploadId) {
+  return `${stateId}__chunks__upload__${uploadId}`;
+}
+
+function parseChunkUploadParams(url, body = {}) {
+  const chunks = normalizePositiveInteger(body.chunks ?? url.searchParams.get("chunks"));
+  const bytes = normalizePositiveInteger(body.bytes ?? url.searchParams.get("bytes"));
+  const updatedAt = normalizeIso(body.updated_at || body.updatedAt || url.searchParams.get("updated_at")) || new Date().toISOString();
+  if (!chunks || !bytes) return null;
+  return { chunks, bytes, updatedAt };
+}
+
+function normalizePositiveInteger(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : null;
 }
 
 function collectPreviousChunkStateIds(stateId, previousData) {
