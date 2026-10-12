@@ -1192,6 +1192,7 @@ function minutesBetween(startTime, endTime) {
 function normalizeBreakMinutes(value) {
   const minutes = Number(value);
   if (!Number.isFinite(minutes) || minutes <= 0) return 0;
+  if (minutes === 15) return 15;
   const rounded = Math.round(minutes / 30) * 30;
   return Math.min(180, Math.max(0, rounded));
 }

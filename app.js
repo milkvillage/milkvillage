@@ -41,7 +41,7 @@ const timeSelectOptions = Array.from({ length: 49 }, (_, index) => {
   const minute = totalMinutes % 60;
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 });
-const attendanceBreakOptions = Array.from({ length: 7 }, (_, index) => index * 30);
+const attendanceBreakOptions = [0, 15, 30, 60, 90, 120, 150, 180];
 const defaultOpenChecklistTasks = [
   { title: "매장 조명/음악/키오스크 켜기" },
   { title: "터미널 영업시작 버튼 클릭" },
@@ -555,6 +555,7 @@ function minutesBetween(startTime, endTime) {
 function normalizeBreakMinutes(value) {
   const minutes = Number(value);
   if (!Number.isFinite(minutes) || minutes <= 0) return 0;
+  if (minutes === 15) return 15;
   const rounded = Math.round(minutes / 30) * 30;
   return Math.min(180, Math.max(0, rounded));
 }
